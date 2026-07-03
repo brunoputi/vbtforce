@@ -9,6 +9,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
   html,body,#root{height:100%;font-family:'Inter',system-ui,-apple-system,sans-serif;}
@@ -2229,6 +2231,233 @@ function AthletesView({athletes,setAthletes,profiles,setProfiles,saveAthlete,del
     e.target.value="";
   },[athletes,saveProfiles]);
 
+  const planilhaFileRef = useRef();
+
+  // Download planilha unificada (ExcelJS: suporta data validation, ao contrário de SheetJS free)
+  const downloadPlanilha = async () => {
+    if (!window.ExcelJS) { alert("Biblioteca ExcelJS não carregou. Recarregue a página (Ctrl+Shift+R)."); return; }
+    const positions = ["Goleiro","Zagueiro","Lateral","Volante","Meia","Extremo","Atacante"];
+    const statuses  = ["ativo","inativo"];
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'VBT·force';
+    wb.created = new Date();
+
+    // === ABA 1: Atletas ===
+    const ws = wb.addWorksheet('Atletas');
+    ws.columns = [
+      { header: 'id', key: 'id', width: 36 },
+      { header: 'name', key: 'name', width: 26 },
+      { header: 'nickname', key: 'nickname', width: 16 },
+      { header: 'dob', key: 'dob', width: 14 },
+      { header: 'position', key: 'position', width: 14 },
+      { header: 'categoria_1', key: 'categoria_1', width: 16 },
+      { header: 'categoria_2', key: 'categoria_2', width: 16 },
+      { header: 'categoria_3', key: 'categoria_3', width: 16 },
+      { header: 'status', key: 'status', width: 12 },
+      { header: 'body_weight', key: 'body_weight', width: 16 },
+      { header: 'height_cm', key: 'height_cm', width: 12 }
+    ];
+    // Header estilizado
+    ws.getRow(1).eachCell(cell => {
+      cell.font = { bold: true, color: {argb: 'FFFFFFFF'}, size: 11 };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: {argb: 'FFC8102E'} }; // vermelho CAP
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = {
+        bottom: { style: 'medium', color: {argb: 'FF000000'} }
+      };
+    });
+    ws.getRow(1).height = 22;
+
+    // Popula linhas — distribui categorias do array nas 3 colunas
+    athletes.forEach(a => {
+      const dobDate = a.dob ? new Date(a.dob + 'T12:00:00') : null;
+      const cats = a.categories || [];
+      ws.addRow({
+        id: a.id || '',
+        name: a.name || '',
+        nickname: a.nickname || '',
+        dob: dobDate,
+        position: a.position || '',
+        categoria_1: cats[0] || '',
+        categoria_2: cats[1] || '',
+        categoria_3: cats[2] || '',
+        status: a.status || 'ativo',
+        body_weight: a.body_weight != null ? a.body_weight : null,
+        height_cm: a.height_cm != null ? a.height_cm : null
+      });
+    });
+
+    // Formata coluna dob como DD/MM/YYYY (padrão BR)
+    ws.getColumn('dob').numFmt = 'dd/mm/yyyy';
+    // ID em cinza claro pra sinalizar "não mexer"
+    ws.getColumn('id').eachCell({includeEmpty:false}, (cell, rowNumber) => {
+      if (rowNumber === 1) return;
+      cell.font = { color: {argb: 'FF999999'}, size: 10 };
+    });
+
+    // Data validations até 500 linhas
+    const lastRow = 500;
+    // Position (coluna E)
+    ws.dataValidations.add('E2:E' + lastRow, {
+      type: 'list', allowBlank: true, showErrorMessage: true,
+      formulae: ['"' + positions.join(',') + '"'],
+      errorStyle: 'error', errorTitle: 'Posição inválida',
+      error: 'Escolha uma da lista: ' + positions.join(', ')
+    });
+    // Categorias 1, 2, 3 (colunas F, G, H)
+    const catFormula = ['"' + CATEGORIES.join(',') + '"'];
+    ['F','G','H'].forEach(col => {
+      ws.dataValidations.add(col + '2:' + col + lastRow, {
+        type: 'list', allowBlank: true, showErrorMessage: true,
+        formulae: catFormula,
+        errorStyle: 'error', errorTitle: 'Categoria inválida',
+        error: 'Escolha uma da lista: ' + CATEGORIES.join(', ')
+      });
+    });
+    // Status (coluna I)
+    ws.dataValidations.add('I2:I' + lastRow, {
+      type: 'list', allowBlank: true, showErrorMessage: true,
+      formulae: ['"' + statuses.join(',') + '"'],
+      errorStyle: 'error', errorTitle: 'Status inválido',
+      error: 'Use ativo ou inativo'
+    });
+    // body_weight (J) e height_cm (K): só números
+    ws.dataValidations.add('J2:J' + lastRow, {
+      type: 'decimal', allowBlank: true, operator: 'between', showErrorMessage: true,
+      formulae: [30, 200], errorStyle: 'error', errorTitle: 'Peso inválido',
+      error: 'Digite um número entre 30 e 200 kg'
+    });
+    ws.dataValidations.add('K2:K' + lastRow, {
+      type: 'decimal', allowBlank: true, operator: 'between', showErrorMessage: true,
+      formulae: [100, 230], errorStyle: 'error', errorTitle: 'Altura inválida',
+      error: 'Digite um número entre 100 e 230 cm'
+    });
+    // Comentários explicativos nos headers (não altera o texto, aparece ao passar mouse)
+    ws.getCell('A1').note = { texts: [{ font: {bold:true, size:10}, text: 'ID interno. NÃO EDITAR — se apagar, será criado atleta duplicado.' }] };
+    ws.getCell('D1').note = { texts: [{ font: {bold:true, size:10}, text: 'Data de nascimento. Formato: DD/MM/AAAA' }] };
+    ws.getCell('J1').note = { texts: [{ font: {bold:true, size:10}, text: 'Peso corporal em quilogramas (kg). Entre 30 e 200.' }] };
+    ws.getCell('K1').note = { texts: [{ font: {bold:true, size:10}, text: 'Altura em centímetros (cm). Entre 100 e 230.' }] };
+    // Comentário no header das categorias
+    ws.getCell('F1').note = {
+      texts: [{
+        font: { bold: true, size: 10 },
+        text: 'Cada coluna aceita UMA categoria via dropdown.\n\nSe o atleta pertence a várias, preencha categoria_2 e categoria_3.\n\nCategorias válidas:\n' + CATEGORIES.join('\n')
+      }]
+    };
+
+    // Congela primeira linha e primeira coluna
+    ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
+
+    // === ABA 2: Referência ===
+    const wsRef = wb.addWorksheet('Referência');
+    wsRef.columns = [
+      { header: 'Tipo', key: 'tipo', width: 24 },
+      { header: 'Valor válido', key: 'valor', width: 32 }
+    ];
+    wsRef.getRow(1).font = { bold: true, color: {argb:'FFFFFFFF'} };
+    wsRef.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: {argb:'FF2D3748'} };
+    CATEGORIES.forEach(c => wsRef.addRow({ tipo: 'Categoria', valor: c }));
+    positions.forEach(p => wsRef.addRow({ tipo: 'Posição', valor: p }));
+    statuses.forEach(s => wsRef.addRow({ tipo: 'Status', valor: s }));
+
+    // Salva
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'atletas_vbtforce_' + new Date().toISOString().slice(0,10) + '.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Upload da planilha: atualiza atletas existentes (matching por id) e cria novos (id vazio)
+  const [uploadingPlanilha, setUploadingPlanilha] = useState(false);
+  const handleUploadPlanilha = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    if (!window.XLSX) { alert("Biblioteca XLSX não carregou. Recarregue a página."); e.target.value=''; return; }
+    setUploadingPlanilha(true);
+    try {
+      const buffer = await f.arrayBuffer();
+      const wb = XLSX.read(buffer, {type:'array', cellDates: true});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {defval: ''});
+      let novos = 0, atualizados = 0, erros = 0;
+      const errosDetalhes = [];
+      const catsInvalidas = new Set();
+      const catsValidas = new Set(CATEGORIES);
+      for (const r of rows) {
+        const nome = String(r.name || '').trim();
+        if (!nome) continue;
+        // dob pode vir como Date (cellDates:true), string ISO, DD/MM/YYYY, ou vazio
+        let dobFinal = null;
+        if (r.dob instanceof Date && !isNaN(r.dob)) {
+          dobFinal = r.dob.toISOString().slice(0,10);
+        } else if (r.dob) {
+          const s = String(r.dob).trim();
+          // Detecta DD/MM/YYYY ou DD-MM-YYYY
+          const brMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+          if (brMatch) {
+            const [, d, m, y] = brMatch;
+            dobFinal = y + '-' + m.padStart(2,'0') + '-' + d.padStart(2,'0');
+          } else {
+            // Assume ISO YYYY-MM-DD
+            dobFinal = s.slice(0,10);
+          }
+        }
+        // Filtra categorias: coleta das 3 colunas separadas, valida contra CATEGORIES
+        const catsRaw = [r.categoria_1, r.categoria_2, r.categoria_3]
+          .map(c => c ? String(c).trim() : '')
+          .filter(Boolean);
+        const catsFiltradas = [];
+        catsRaw.forEach(c => {
+          if (catsValidas.has(c)) {
+            if (!catsFiltradas.includes(c)) catsFiltradas.push(c); // evita duplicatas
+          } else {
+            catsInvalidas.add(c);
+          }
+        });
+        const payload = {
+          id: r.id && String(r.id).trim() ? String(r.id).trim() : null,
+          name: nome,
+          nickname: r.nickname ? String(r.nickname).trim() : null,
+          dob: dobFinal,
+          position: r.position ? String(r.position).trim() : null,
+          categories: catsFiltradas,
+          status: r.status ? String(r.status).trim() : 'ativo',
+          body_weight: (r.body_weight !== '' && r.body_weight != null) ? Number(r.body_weight) : null,
+          height_cm: (r.height_cm !== '' && r.height_cm != null) ? Number(r.height_cm) : null,
+          photo: null
+        };
+        // Preserva foto atual se atleta já existe
+        if (payload.id) {
+          const existing = athletes.find(a => a.id === payload.id);
+          if (existing) payload.photo = existing.photo_url || null;
+        }
+        try {
+          await saveAthlete(payload);
+          if (payload.id) atualizados++; else novos++;
+        } catch(err) {
+          erros++;
+          errosDetalhes.push(nome + ': ' + err.message);
+          console.error("Erro na linha", r, err);
+        }
+      }
+      let msg = `Planilha processada:\n\n• ${atualizados} atualizado(s)\n• ${novos} novo(s)`;
+      if (catsInvalidas.size > 0) {
+        msg += `\n\nCategorias ignoradas (não existem no sistema):\n${[...catsInvalidas].join(', ')}`;
+      }
+      if (erros > 0) msg += `\n\n${erros} erro(s):\n` + errosDetalhes.slice(0,5).join('\n');
+      alert(msg);
+    } catch(err) {
+      alert("Erro ao processar planilha: " + err.message);
+    } finally {
+      setUploadingPlanilha(false);
+      e.target.value = '';
+    }
+  };
+
   const norm=normStr;
   const filtered=useMemo(()=>{
     let base=athletes;
@@ -2250,7 +2479,19 @@ function AthletesView({athletes,setAthletes,profiles,setProfiles,saveAthlete,del
         el("input",{type:"file",accept:".csv",ref:fileRef,onChange:handleCSV,style:{display:"none"}}),
         el(Btn,{onClick:()=>fileRef.current&&fileRef.current.click()},importing?"Importando…":"↑ CSV Output Sports")
       ),
-      el(Btn,{onClick:()=>setShowWeights(true)},"⚖️ Pesos"),
+      // Bloco: atualização em lote via planilha
+      el("div",{title:"Baixe a planilha, edite peso/estatura/dados de todos os atletas de uma vez no Excel, e envie de volta.",
+        style:{display:"flex",alignItems:"center",gap:6,padding:"4px 8px",
+        border:"1px solid "+T.border,borderRadius:8,background:"#F7FAFC"}},
+        el("span",{style:{fontSize:10,fontWeight:800,color:T.muted,textTransform:"uppercase",letterSpacing:".05em",marginRight:2}},"Atualizar em lote"),
+        el(Btn,{onClick:downloadPlanilha,title:"Baixa planilha Excel com todos os atletas preenchidos"},"⬇ Baixar Excel"),
+        el("div",null,
+          el("input",{type:"file",accept:".xlsx,.xls",ref:planilhaFileRef,onChange:handleUploadPlanilha,style:{display:"none"}}),
+          el(Btn,{onClick:()=>planilhaFileRef.current&&planilhaFileRef.current.click(),
+            title:"Envia planilha editada de volta pro sistema"},
+            uploadingPlanilha ? "Enviando…" : "⬆ Enviar Excel")
+        )
+      ),
       el("input",{value:search,onChange:e=>setSearch(e.target.value),placeholder:"Buscar atleta…",style:{flex:1,minWidth:140,padding:"7px 10px",borderRadius:7,border:"1.5px solid "+T.border,background:"#fff",color:T.text,fontSize:13,outline:"none"}}),
       // Storage status
       el("div",{style:{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:6,background:"#F0FFF4",border:"1px solid #9AE6B4"},title:"Dados salvos no navegador"},
@@ -2719,11 +2960,233 @@ function BarsModal({bars,setBars,onClose}) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ROOT APP — sem auth, conexão direta Supabase
+// DASHBOARD — visão consolidada com filtros de categoria e período
 // ═══════════════════════════════════════════════════════════════════════════
+function DashboardView({athletes, profiles, loadMonth, microDays}) {
+  const el = React.createElement;
+  const [cat, setCat] = useState("Todas");
+  const [periodo, setPeriodo] = useState("30d"); // "7d" | "30d" | "90d"
+
+  // Filtro de atletas por categoria
+  const atletasFiltrados = useMemo(() => {
+    if (cat === "Todas") return athletes.filter(a => a.status === "ativo");
+    return athletes.filter(a => a.status === "ativo" && (a.categories || []).includes(cat));
+  }, [athletes, cat]);
+
+  // Range de datas
+  const dateRange = useMemo(() => {
+    const end = new Date();
+    const start = new Date();
+    const days = periodo === "7d" ? 7 : periodo === "30d" ? 30 : 90;
+    start.setDate(start.getDate() - days);
+    return { start, end, days };
+  }, [periodo]);
+
+  // Carrega os meses cobertos pelo range
+  React.useEffect(() => {
+    if (!loadMonth) return;
+    const meses = new Set();
+    const cur = new Date(dateRange.start);
+    while (cur <= dateRange.end) {
+      meses.add(cur.getFullYear() + "-" + cur.getMonth());
+      cur.setDate(cur.getDate() + 15);
+    }
+    // Dashboard mostra dados da categoria "Profissional" por default (microciclo é por categoria)
+    // Se categoria filtrada não for "Todas", usa ela
+    const catMicro = cat === "Todas" ? "Profissional" : cat;
+    meses.forEach(mk => {
+      const [y, m] = mk.split("-").map(Number);
+      loadMonth(y, m, catMicro);
+    });
+  }, [dateRange, cat, loadMonth]);
+
+  // Filtra os dias do microciclo pelo range de datas
+  const diasNoRange = useMemo(() => {
+    const fmt = d => d.toISOString().slice(0,10);
+    const startStr = fmt(dateRange.start);
+    const endStr = fmt(dateRange.end);
+    const result = [];
+    Object.entries(microDays || {}).forEach(([date, dy]) => {
+      if (date >= startStr && date <= endStr) result.push({ date, ...dy });
+    });
+    return result;
+  }, [microDays, dateRange]);
+
+  // Contagens de tipos de treino (soma das 3 janelas por dia)
+  const contagem = useMemo(() => {
+    const c = { campo: 0, academia: 0, corretivo: 0, fisio: 0, correr: 0, jogo: 0, folga: 0, viagem: 0, treinoTotal: 0 };
+    diasNoRange.forEach(d => {
+      ["am","pm","pn"].forEach(p => {
+        const tipo = d[p + "_type"];
+        if (!tipo) return;
+        if (tipo === "jogo") c.jogo++;
+        else if (tipo === "folga") c.folga++;
+        else if (tipo === "viagem") c.viagem++;
+        else if (tipo === "treino") {
+          c.treinoTotal++;
+          const acts = (d[p + "_activities"] || "").toLowerCase();
+          if (acts.includes("campo")) c.campo++;
+          if (acts.includes("academia")) c.academia++;
+          if (acts.includes("correti")) c.corretivo++;
+          if (acts.includes("fisio")) c.fisio++;
+          if (acts.includes("corr")) c.correr++;
+        }
+      });
+    });
+    return c;
+  }, [diasNoRange]);
+
+  // Perfis VBT dos atletas filtrados: e1RM médio por exercício
+  const e1rmPorExercicio = useMemo(() => {
+    const result = {};
+    ["Back Squat", "Trap Bar Deadlift", "Hip Thrust"].forEach(ex => {
+      const valores = [];
+      atletasFiltrados.forEach(a => {
+        const prof = resolveProfile(a.name, profiles);
+        const exProf = prof && prof[ex];
+        if (exProf && exProf.e1rm && exProf.e1rm > 0) valores.push(exProf.e1rm);
+      });
+      const media = valores.length ? Math.round(valores.reduce((s,v)=>s+v,0) / valores.length) : 0;
+      const max = valores.length ? Math.round(Math.max(...valores)) : 0;
+      result[ex] = { media, max, n: valores.length };
+    });
+    return result;
+  }, [atletasFiltrados, profiles]);
+
+  // Distribuição por posição
+  const porPosicao = useMemo(() => {
+    const c = {};
+    atletasFiltrados.forEach(a => {
+      const p = a.position || "Sem posição";
+      c[p] = (c[p] || 0) + 1;
+    });
+    return Object.entries(c).sort((a,b) => b[1] - a[1]);
+  }, [atletasFiltrados]);
+
+  // Total com perfil VBT
+  const comPerfilVBT = atletasFiltrados.filter(a => resolveProfile(a.name, profiles)).length;
+
+  // Componentes visuais
+  const KpiCard = ({label, value, sub, color}) => el("div", {style:{
+    background:T.card, border:"1px solid "+T.border, borderRadius:10, padding:"14px 16px",
+    display:"flex", flexDirection:"column", gap:4, flex:1, minWidth:0
+  }},
+    el("div", {style:{fontSize:10, fontWeight:800, color:T.muted, textTransform:"uppercase", letterSpacing:".05em"}}, label),
+    el("div", {style:{fontSize:26, fontWeight:900, color:color||T.text, lineHeight:1}}, value),
+    sub && el("div", {style:{fontSize:11, color:T.muted, marginTop:2}}, sub)
+  );
+
+  const BarRow = ({label, value, max, color}) => {
+    const pct = max > 0 ? (value / max) * 100 : 0;
+    return el("div", {style:{marginBottom:6}},
+      el("div", {style:{display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:3}},
+        el("span", {style:{fontWeight:700, color:T.text}}, label),
+        el("span", {style:{fontWeight:600, color:T.muted}}, value)
+      ),
+      el("div", {style:{height:8, background:"#EDF2F7", borderRadius:4, overflow:"hidden"}},
+        el("div", {style:{height:"100%", width:pct+"%", background:color||T.accent, borderRadius:4}})
+      )
+    );
+  };
+
+  const Section = ({title, subtitle, children}) => el("div", {style:{
+    background:T.card, border:"1px solid "+T.border, borderRadius:10, padding:"14px 16px", minWidth:0
+  }},
+    el("div", {style:{marginBottom:12}},
+      el("div", {style:{fontSize:12, fontWeight:800, color:T.text, letterSpacing:".02em"}}, title),
+      subtitle && el("div", {style:{fontSize:10, color:T.muted, marginTop:2}}, subtitle)
+    ),
+    children
+  );
+
+  const maxTipoTreino = Math.max(contagem.campo, contagem.academia, contagem.corretivo, contagem.fisio, contagem.correr, 1);
+  const maxPosicao = Math.max(...porPosicao.map(p => p[1]), 1);
+  const maxE1rm = Math.max(...Object.values(e1rmPorExercicio).map(v => v.max), 1);
+
+  const periodoLabel = periodo === "7d" ? "7 dias" : periodo === "30d" ? "30 dias" : "90 dias";
+  const dataInicioLbl = dateRange.start.toLocaleDateString("pt-BR", {day:"2-digit",month:"2-digit"});
+  const dataFimLbl = dateRange.end.toLocaleDateString("pt-BR", {day:"2-digit",month:"2-digit"});
+
+  return el("div", {style:{display:"flex", flexDirection:"column", flex:1, minHeight:0, overflowY:"auto", background:T.bg, padding:16, gap:14}},
+    // Filtros
+    el("div", {style:{display:"flex", alignItems:"center", gap:12, flexWrap:"wrap"}},
+      el("div", {style:{display:"flex", alignItems:"center", gap:6}},
+        el("span", {style:{fontSize:10, fontWeight:700, color:T.muted, textTransform:"uppercase"}}, "Categoria"),
+        el("select", {value:cat, onChange:e=>setCat(e.target.value), style:{
+          padding:"6px 10px", borderRadius:7, border:"1.5px solid "+T.border,
+          background:"#fff", fontSize:12, fontWeight:700, color:T.text, cursor:"pointer", outline:"none"
+        }}, ...["Todas", ...CATEGORIES].map(c => el("option", {key:c, value:c}, c)))
+      ),
+      el("div", {style:{display:"flex", alignItems:"center", gap:6}},
+        el("span", {style:{fontSize:10, fontWeight:700, color:T.muted, textTransform:"uppercase"}}, "Período"),
+        ...["7d","30d","90d"].map(p => el("button", {key:p, onClick:()=>setPeriodo(p), style:{
+          padding:"6px 12px", borderRadius:7, border:"1.5px solid "+(periodo===p?T.accent:T.border),
+          background:periodo===p?"#EBF4FF":"#fff", color:periodo===p?T.accent:T.sub,
+          fontSize:11, fontWeight:800, cursor:"pointer"
+        }}, p === "7d" ? "7 dias" : p === "30d" ? "30 dias" : "90 dias"))
+      ),
+      el("div", {style:{marginLeft:"auto", fontSize:11, color:T.muted}},
+        dataInicioLbl + " → " + dataFimLbl + " · " + atletasFiltrados.length + " atletas")
+    ),
+
+    // KPIs
+    el("div", {style:{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:10}},
+      el(KpiCard, {label:"Atletas ativos", value:atletasFiltrados.length, sub:comPerfilVBT+" com perfil VBT"}),
+      el(KpiCard, {label:"Treinos", value:contagem.treinoTotal, sub:"campo + academia + demais", color:"#2563EB"}),
+      el(KpiCard, {label:"Jogos", value:contagem.jogo, sub:"no período", color:"#C53030"}),
+      el(KpiCard, {label:"Folgas + Viagens", value:contagem.folga + contagem.viagem, sub:contagem.folga+" folga · "+contagem.viagem+" viagem", color:"#D97706"})
+    ),
+
+    // Grid principal
+    el("div", {style:{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))", gap:12}},
+      el(Section, {title:"Tipos de treino no período", subtitle:"contagem por atividade nos treinos"},
+        contagem.treinoTotal === 0
+          ? el("div", {style:{padding:"20px 0", textAlign:"center", color:T.muted, fontSize:11}}, "Sem treinos registrados no período")
+          : el("div", null,
+              el(BarRow, {label:"Campo", value:contagem.campo, max:maxTipoTreino, color:"#38A169"}),
+              el(BarRow, {label:"Academia", value:contagem.academia, max:maxTipoTreino, color:"#2563EB"}),
+              el(BarRow, {label:"Corretivo", value:contagem.corretivo, max:maxTipoTreino, color:"#805AD5"}),
+              el(BarRow, {label:"Fisio", value:contagem.fisio, max:maxTipoTreino, color:"#D69E2E"}),
+              el(BarRow, {label:"Correr", value:contagem.correr, max:maxTipoTreino, color:"#DD6B20"})
+            )
+      ),
+      el(Section, {title:"e1RM médio por exercício", subtitle:cat === "Todas" ? "média de todos ativos" : "média em " + cat},
+        el("div", null,
+          ...["Back Squat","Trap Bar Deadlift","Hip Thrust"].map(ex => {
+            const v = e1rmPorExercicio[ex];
+            if (v.n === 0) return el("div", {key:ex, style:{fontSize:11, color:T.muted, padding:"4px 0"}}, ex + ": sem dados");
+            return el("div", {key:ex, style:{marginBottom:8}},
+              el("div", {style:{display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:3}},
+                el("span", {style:{fontWeight:700}}, ex),
+                el("span", {style:{fontWeight:600, color:T.muted}}, "média " + v.media + " · máx " + v.max + " · n=" + v.n)
+              ),
+              el("div", {style:{height:8, background:"#EDF2F7", borderRadius:4}},
+                el("div", {style:{height:"100%", width:(v.media/maxE1rm*100)+"%", background:T.accent, borderRadius:4}})
+              )
+            );
+          })
+        )
+      ),
+      el(Section, {title:"Distribuição por posição", subtitle:atletasFiltrados.length + " atletas"},
+        porPosicao.length === 0
+          ? el("div", {style:{padding:"20px 0", textAlign:"center", color:T.muted, fontSize:11}}, "Nenhum atleta na categoria")
+          : el("div", null, ...porPosicao.map(([pos, qtd]) =>
+              el(BarRow, {key:pos, label:pos, value:qtd, max:maxPosicao, color:"#4A5568"})
+            ))
+      )
+    ),
+
+    // Rodapé com nota
+    el("div", {style:{textAlign:"center", fontSize:10, color:T.muted, padding:"4px 0"}},
+      "Categoria \"Todas\" mostra microciclo do Profissional. Selecione uma categoria específica para ver os dados dela.")
+  );
+}
+
+
+
 function App() {
   const el = React.createElement;
-  const [view, setView] = useState("session");
+  const [view, setView] = useState("dashboard");
   const [athletes, setAthletes] = useState([]);
   const [profiles, setProfiles] = useState({});
   const [bars, setBars] = useState({olympic_kg:20, trapbar_kg:30});
@@ -2906,6 +3369,7 @@ function App() {
   window._vbtProfiles = profiles;
 
   const TABS = [
+    {id: "dashboard", icon: "📈", label: "Início"},
     {id: "session",  icon: "⚡", label: "Sessão"},
     {id: "micro",    icon: "📅", label: "Microciclo"},
     {id: "athletes", icon: "👤", label: "Atletas"},
@@ -2953,6 +3417,7 @@ function App() {
     el("div", {style: {flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0}},
       error && el("div", {style: {padding: "10px 20px", background: "#FFF5F5", color: "#C53030", fontSize: 13}}, "Erro: " + error),
       !dataLoaded && el(Spinner),
+      dataLoaded && view === "dashboard" && el(DashboardView, {athletes, profiles, loadMonth, microDays}),
       dataLoaded && view === "session"  && el(SessionView,  {athletes, profiles, bars}),
       dataLoaded && view === "micro"    && el(MicrocycleView, {microDays, saveMicroDay, loadMonth, selectedCategoria, setSelectedCategoria}),
       dataLoaded && view === "athletes" && el(AthletesView, {athletes, setAthletes, profiles, setProfiles, saveAthlete, deleteAthlete, saveProfiles}),
