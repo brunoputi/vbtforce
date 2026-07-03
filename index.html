@@ -91,8 +91,10 @@ const apiV2 = {
     const r = await api.get('mesociclo', 'id=eq.' + id);
     return r[0] || null;
   },
-  async listMesociclos(temporada) {
-    return api.get('mesociclo', 'temporada=eq.' + temporada + '&order=data_inicio.asc');
+  async listMesociclos(temporada, categoria) {
+    let q = 'temporada=eq.' + temporada + '&order=data_inicio.asc';
+    if (categoria) q += '&categoria_id=eq.' + encodeURIComponent(categoria);
+    return api.get('mesociclo', q);
   },
   async createMesociclo(payload) {
     const r = await api.post('mesociclo', payload);
@@ -196,32 +198,36 @@ function mv2_monthName(monthKey) {
 }
 
 // Caches em memória (não persistentes; recarregam ao dar F5)
-const mv2_mesocicloCache = {}; // "YYYY-MM" -> mesociclo
-const mv2_microcicloCache = {}; // "mesocicloId/semana" -> microciclo
+const mv2_mesocicloCache = {}; // "categoria/YYYY-MM" -> mesociclo
+const mv2_microcicloCache = {}; // "mesocicloId/semana" -> microciclo (mesocicloId já é único por categoria)
 
-async function mv2_ensureMesociclo(monthKey) {
-  if (mv2_mesocicloCache[monthKey]) return mv2_mesocicloCache[monthKey];
+async function mv2_ensureMesociclo(monthKey, categoria) {
+  const cat = categoria || 'Profissional';
+  const cacheKey = cat + '/' + monthKey;
+  if (mv2_mesocicloCache[cacheKey]) return mv2_mesocicloCache[cacheKey];
   const [y, mo] = monthKey.split('-').map(Number);
   const temporada = String(y);
   const dataInicio = monthKey + '-01';
   const lastDay = new Date(y, mo, 0).getDate();
   const dataFim = monthKey + '-' + String(lastDay).padStart(2,'0');
-  const existentes = await apiV2.listMesociclos(temporada);
+  const existentes = await apiV2.listMesociclos(temporada, cat);
   const found = existentes.find(m => m.data_inicio === dataInicio);
-  if (found) { mv2_mesocicloCache[monthKey] = found; return found; }
+  if (found) { mv2_mesocicloCache[cacheKey] = found; return found; }
   const novo = await apiV2.createMesociclo({
     nome: mv2_monthName(monthKey),
     fase: 'in_season', carga_alvo: 'moderada',
-    data_inicio: dataInicio, data_fim: dataFim, temporada
+    data_inicio: dataInicio, data_fim: dataFim, temporada,
+    categoria_id: cat
   });
-  mv2_mesocicloCache[monthKey] = novo;
+  mv2_mesocicloCache[cacheKey] = novo;
   return novo;
 }
 
-async function mv2_ensureMicrociclo(dateStr) {
+async function mv2_ensureMicrociclo(dateStr, categoria) {
+  const cat = categoria || 'Profissional';
   const monthKey = mv2_getWeekMonthKey(dateStr);
   const semanaNumero = mv2_getSemanaNumero(dateStr);
-  const meso = await mv2_ensureMesociclo(monthKey);
+  const meso = await mv2_ensureMesociclo(monthKey, cat);
   const key = meso.id + '/' + semanaNumero;
   if (mv2_microcicloCache[key]) return mv2_microcicloCache[key];
   const existentes = await apiV2.listMicrociclos(meso.id);
@@ -307,10 +313,13 @@ function mv2_nestedToFlat(dia) {
 }
 
 // Carrega dias por range de datas [firstDate, lastDate], inclusive
-async function mv2_loadDiasRange(firstDate, lastDate) {
+async function mv2_loadDiasRange(firstDate, lastDate, categoria) {
+  const cat = categoria || 'Profissional';
   const rows = await api.get('dia',
     'data=gte.' + firstDate + '&data=lte.' + lastDate +
-    '&select=*,jogo(*)&order=data.asc');
+    '&microciclo.mesociclo.categoria_id=eq.' + encodeURIComponent(cat) +
+    '&select=*,jogo(*),microciclo!inner(mesociclo!inner(categoria_id))' +
+    '&order=data.asc');
   const result = {};
   (rows || []).forEach(d => { result[d.data] = mv2_nestedToFlat(d); });
   return result;
@@ -363,8 +372,8 @@ async function mv2_deletePlano(path) {
 }
 
 // Persiste um dia inteiro (upsert em `dia`, upsert/delete em `jogo` conforme necessário)
-async function mv2_saveDia(dateStr, flat) {
-  const micro = await mv2_ensureMicrociclo(dateStr);
+async function mv2_saveDia(dateStr, flat, categoria) {
+  const micro = await mv2_ensureMicrociclo(dateStr, categoria);
   const payload = {
     microciclo_id: micro.id,
     data: dateStr,
@@ -1064,7 +1073,7 @@ function getPeriodReps(dd, period) {
   return null;
 }
 
-function MicrocycleView({microDays, saveMicroDay, loadMonth}) {
+function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, setSelectedCategoria}) {
   const el = React.createElement;
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
@@ -1091,10 +1100,10 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth}) {
     } catch(e) { console.error('Erro ao gravar metodologia:', e); }
   };
 
-  // Carrega dias do mês atual ao montar e ao trocar year/month
+  // Carrega dias do mês atual ao montar, ao trocar year/month, e ao trocar categoria
   React.useEffect(() => {
-    if (loadMonth) loadMonth(year, month);
-  }, [year, month, loadMonth]);
+    if (loadMonth) loadMonth(year, month, selectedCategoria);
+  }, [year, month, loadMonth, selectedCategoria]);
 
   const dates = useMemo(() => getMonthDates(year, month), [year, month]);
   const monthLabel = new Date(year, month).toLocaleDateString("pt-BR", {month:"long", year:"numeric"});
@@ -1393,6 +1402,15 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth}) {
       el("button",{onClick:nextMonth,style:{width:32,height:32,borderRadius:8,border:"1px solid "+T.border,
         background:"#fff",cursor:"pointer",fontSize:16,color:T.sub}},"›"),
       el("div",{style:{fontWeight:800,fontSize:17,color:T.text,textTransform:"capitalize"}},monthLabel),
+      // Dropdown de categoria — controla qual microciclo carregar
+      el("select",{
+        value:selectedCategoria,
+        onChange:e=>setSelectedCategoria(e.target.value),
+        style:{marginLeft:6,padding:"6px 10px",borderRadius:8,border:"1.5px solid "+T.accent,
+          background:"#EBF4FF",color:T.accent,fontSize:12,fontWeight:800,cursor:"pointer",outline:"none"}
+      }, ...["Profissional","Sub 20","Sub 17","Sub 16","Sub 15","Sub 14","Sub 13"].map(c =>
+        el("option",{key:c,value:c}, c)
+      )),
       el("div",{style:{marginLeft:"auto",display:"flex",gap:10,fontSize:11,color:T.muted,alignItems:"center",flexWrap:"wrap"}},
         el("span",{style:{fontWeight:700}}, stats.campo+" campo"),
         el("span",{style:{fontWeight:700,color:"#D97706"}}, stats.aca+" academia"),
@@ -2844,23 +2862,27 @@ function App() {
 
   // Debounce map: dateStr -> timeoutId
   const mv2SaveTimersRef = React.useRef({});
+  const mv2LastCatRef = React.useRef(null);
+  const [selectedCategoria, setSelectedCategoria] = useState('Profissional');
 
   const saveMicroDay = (dateStr, dayData) => {
     // Estado local imediato (UI reativa)
     setMicroDays(prev => ({ ...prev, [dateStr]: dayData }));
     // Debounce da chamada ao Supabase
     const timers = mv2SaveTimersRef.current;
+    const cat = selectedCategoria;
     if (timers[dateStr]) clearTimeout(timers[dateStr]);
     timers[dateStr] = setTimeout(async () => {
       try {
-        await mv2_saveDia(dateStr, dayData);
+        await mv2_saveDia(dateStr, dayData, cat);
       } catch(e) { console.error("Erro ao salvar dia " + dateStr + ":", e); }
       delete timers[dateStr];
     }, 400);
   };
 
-  // Carrega os 42 dias visíveis no calendário de um mês (com merge no state)
-  const loadMonth = React.useCallback(async (year, month0) => {
+  // Carrega os 42 dias visíveis no calendário de um mês, filtrados por categoria
+  const loadMonth = React.useCallback(async (year, month0, categoria) => {
+    const cat = categoria || 'Profissional';
     // Range = primeira segunda da grid ao último domingo (42 dias)
     const first = new Date(year, month0, 1);
     const startDay = first.getDay() === 0 ? 6 : first.getDay() - 1;
@@ -2869,8 +2891,14 @@ function App() {
     rangeEnd.setDate(rangeEnd.getDate() + 41);
     const fmt = d => d.toISOString().slice(0,10);
     try {
-      const dias = await mv2_loadDiasRange(fmt(rangeStart), fmt(rangeEnd));
-      setMicroDays(prev => ({ ...prev, ...dias }));
+      const dias = await mv2_loadDiasRange(fmt(rangeStart), fmt(rangeEnd), cat);
+      // Se categoria mudou, resetar tudo antes de mesclar (evita ver dados de outra categoria)
+      if (mv2LastCatRef.current !== cat) {
+        mv2LastCatRef.current = cat;
+        setMicroDays(dias);
+      } else {
+        setMicroDays(prev => ({ ...prev, ...dias }));
+      }
     } catch(e) { console.error("Erro ao carregar mês:", e); }
   }, []);
 
@@ -2926,7 +2954,7 @@ function App() {
       error && el("div", {style: {padding: "10px 20px", background: "#FFF5F5", color: "#C53030", fontSize: 13}}, "Erro: " + error),
       !dataLoaded && el(Spinner),
       dataLoaded && view === "session"  && el(SessionView,  {athletes, profiles, bars}),
-      dataLoaded && view === "micro"    && el(MicrocycleView, {microDays, saveMicroDay, loadMonth}),
+      dataLoaded && view === "micro"    && el(MicrocycleView, {microDays, saveMicroDay, loadMonth, selectedCategoria, setSelectedCategoria}),
       dataLoaded && view === "athletes" && el(AthletesView, {athletes, setAthletes, profiles, setProfiles, saveAthlete, deleteAthlete, saveProfiles}),
       dataLoaded && view === "profiles" && el(ProfilesView, {athletes, profiles})
     ),
