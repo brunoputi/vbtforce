@@ -237,12 +237,10 @@ function mv2_flatToPeriodo(flat, p) {
   const tipo = flat[p + '_type'] || null;
   if (!tipo) return {};
   const o = { tipo };
-  // Campos comuns a qualquer tipo: plano anexado
-  if (flat[p + '_plano_url']) {
-    o.plano_url = flat[p + '_plano_url'];
-    o.plano_path = flat[p + '_plano_path'];
-    o.plano_filename = flat[p + '_plano_filename'];
-    o.plano_size = flat[p + '_plano_size'];
+  // Campos comuns a qualquer tipo: planos anexados (array)
+  const planos = flat[p + '_planos'];
+  if (Array.isArray(planos) && planos.length > 0) {
+    o.planos = planos;
   }
   if (tipo === 'jogo' || tipo === 'folga' || tipo === 'viagem') return o;
   // Treino: campos específicos
@@ -272,12 +270,17 @@ function mv2_nestedToFlat(dia) {
     const o = dia['periodo_' + db] || {};
     if (!o || !o.tipo) return;
     flat[p + '_type'] = o.tipo;
-    // Plano anexado (comum a qualquer tipo)
-    if (o.plano_url) {
-      flat[p + '_plano_url'] = o.plano_url;
-      flat[p + '_plano_path'] = o.plano_path;
-      flat[p + '_plano_filename'] = o.plano_filename;
-      flat[p + '_plano_size'] = o.plano_size;
+    // Planos anexados (formato novo: array)
+    if (Array.isArray(o.planos) && o.planos.length > 0) {
+      flat[p + '_planos'] = o.planos;
+    } else if (o.plano_url) {
+      // Compatibilidade retroativa: converte formato antigo em array de 1 item
+      flat[p + '_planos'] = [{
+        url: o.plano_url,
+        path: o.plano_path,
+        filename: o.plano_filename,
+        size: o.plano_size
+      }];
     }
     if (o.tipo === 'treino') {
       if (o.grupos !== undefined) flat[p + '_groups'] = o.grupos;
@@ -331,21 +334,21 @@ async function mv2_addMetodologia(texto) {
 async function mv2_uploadPlano(dateStr, period, file) {
   const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
   const periodoDb = period === 'am' ? 'manha' : period === 'pm' ? 'tarde' : 'noite';
-  const path = dateStr + '/' + periodoDb + '.' + ext;
+  // Timestamp no path evita colisão quando há múltiplos arquivos por período
+  const path = dateStr + '/' + periodoDb + '/' + Date.now() + '.' + ext;
   const res = await fetch(SUPA_URL + '/storage/v1/object/microciclo-planos/' + path, {
     method: 'POST',
     headers: {
       'apikey': SUPA_KEY,
       'Authorization': 'Bearer ' + SUPA_KEY,
-      'Content-Type': file.type || 'application/octet-stream',
-      'x-upsert': 'true'
+      'Content-Type': file.type || 'application/octet-stream'
     },
     body: file
   });
   if (!res.ok) throw new Error('Upload falhou: ' + res.status + ' ' + await res.text());
   return {
     path,
-    url: SUPA_URL + '/storage/v1/object/public/microciclo-planos/' + path + '?t=' + Date.now(),
+    url: SUPA_URL + '/storage/v1/object/public/microciclo-planos/' + path,
     filename: file.name,
     size: file.size
   };
@@ -689,7 +692,6 @@ function SessionView({athletes,profiles,bars}) {
   const [date,setDate]= useState(()=>new Date().toISOString().slice(0,10));
   const [showRpt,setRpt]=useState(false);
   const [showSel,setShowSel]=useState(false);
-  const [showDiag,setShowDiag]=useState(false);
   const [catFilter,setCat]=useState("Todas");
   const [selected,setSelected]=useState(null); // null = todos
   const vel=VEL_STEPS[velIdx], zone=getZone(vel);
@@ -808,13 +810,7 @@ function SessionView({athletes,profiles,bars}) {
             padding:"8px 16px",borderRadius:8,border:"1.5px solid "+T.border,
             background:"#fff",color:T.sub,fontSize:12,fontWeight:700,cursor:"pointer",
             display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"
-          }},"📋 Relatório"),
-          // Diagnóstico
-          el("button",{onClick:()=>setShowDiag(true),style:{
-            padding:"8px 14px",borderRadius:8,border:"1.5px solid "+T.border,
-            background:"#fff",color:T.sub,fontSize:12,fontWeight:700,cursor:"pointer",
-            display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap"
-          }},"🔬 Perfis")
+          }},"📋 Relatório")
         )
       )
     ),
@@ -862,8 +858,7 @@ function SessionView({athletes,profiles,bars}) {
       onClose:()=>setShowSel(false)
     }),
 
-    showRpt&&el(ReportModal,{grouped,zone,vel,ser,rep,bars,date,onClose:()=>setRpt(false)}),
-    showDiag&&el(DiagnosticModal,{active,profiles,bars,vel,ex,onClose:()=>setShowDiag(false)})
+    showRpt&&el(ReportModal,{grouped,zone,vel,ser,rep,bars,date,onClose:()=>setRpt(false)})
   );
 }
 
@@ -1128,21 +1123,23 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth}) {
     return {treinos, jogos, campo, aca, corr, fisio};
   }, [dates, microDays]);
 
-  // Lista todos os anexos do mês visualizado, agrupados por dia
+  // Lista todos os anexos do mês visualizado (múltiplos por período possíveis)
   const anexosDoMes = useMemo(() => {
     const list = [];
     dates.filter(d => d.cur).forEach(d => {
       const dy = microDays[d.date];
       if (!dy) return;
       ["am","pm","pn"].forEach(p => {
-        const url = dy[p + "_plano_url"];
-        if (!url) return;
-        list.push({
-          date: d.date, day: d.day, periodo: p,
-          filename: dy[p + "_plano_filename"] || "arquivo",
-          size: dy[p + "_plano_size"] || 0,
-          url,
-          path: dy[p + "_plano_path"] || null
+        const planos = Array.isArray(dy[p + "_planos"]) ? dy[p + "_planos"] : [];
+        planos.forEach(pl => {
+          if (!pl.url) return;
+          list.push({
+            date: d.date, day: d.day, periodo: p,
+            filename: pl.filename || "arquivo",
+            size: pl.size || 0,
+            url: pl.url,
+            path: pl.path || null
+          });
         });
       });
     });
@@ -1336,47 +1333,50 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth}) {
 
   // Bloco de plano anexado (funciona pra qualquer tipo de período)
   const renderPlanoAnexo = (period) => {
-    const url = sd[period + '_plano_url'];
-    const path = sd[period + '_plano_path'];
-    const filename = sd[period + '_plano_filename'];
-    const size = sd[period + '_plano_size'];
+    const planos = Array.isArray(sd[period + '_planos']) ? sd[period + '_planos'] : [];
     const inputId = 'plano-input-' + period + '-' + sel;
     return el("div",{style:{marginTop:8,paddingTop:8,borderTop:"1px dashed "+T.border+"88"}},
-      el("div",{style:{fontSize:8,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:5,letterSpacing:".05em"}},"Plano anexado"),
-      url && el("div",{style:{display:"flex",alignItems:"center",gap:6,padding:"6px 8px",background:"#F1F5F9",borderRadius:6,marginBottom:6}},
-        el("a",{href:url,target:"_blank",rel:"noopener",style:{flex:1,fontSize:10,fontWeight:700,color:T.accent,textDecoration:"none",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}},
-          filename || "Abrir arquivo"),
-        size && el("span",{style:{fontSize:9,color:T.muted,flexShrink:0}}, Math.max(1, Math.round(size/1024)) + " kb"),
+      el("div",{style:{fontSize:8,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:5,letterSpacing:".05em"}},
+        "Planos anexados" + (planos.length > 0 ? " (" + planos.length + ")" : "")),
+      ...planos.map((p, idx) => el("div",{key:p.path||idx,style:{
+        display:"flex",alignItems:"center",gap:6,padding:"6px 8px",
+        background:"#F1F5F9",borderRadius:6,marginBottom:4
+      }},
+        el("a",{href:p.url,target:"_blank",rel:"noopener",style:{
+          flex:1,fontSize:10,fontWeight:700,color:T.accent,textDecoration:"none",
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0
+        }}, p.filename || "Abrir arquivo"),
+        p.size > 0 && el("span",{style:{fontSize:9,color:T.muted,flexShrink:0}},
+          Math.max(1, Math.round(p.size/1024)) + " kb"),
         el("button",{onClick:async ()=>{
-          if (!confirm("Remover arquivo anexado?")) return;
+          if (!confirm("Remover " + (p.filename||"este arquivo") + "?")) return;
           try {
-            if (path) await mv2_deletePlano(path);
-            const cur = microDays[sel]||{};
+            if (p.path) await mv2_deletePlano(p.path);
+            const cur = microDays[sel] || {};
+            const curPlanos = Array.isArray(cur[period + '_planos']) ? cur[period + '_planos'] : [];
+            const newPlanos = curPlanos.filter(x => x.path !== p.path);
             saveMicroDay(sel, {...cur,
-              [period+'_plano_url']:null, [period+'_plano_path']:null,
-              [period+'_plano_filename']:null, [period+'_plano_size']:null
+              [period + '_planos']: newPlanos.length > 0 ? newPlanos : null
             });
-          } catch(e) { alert("Erro ao remover: "+e.message); }
-        },style:{padding:"1px 6px",borderRadius:4,border:"1px solid "+T.border,background:"#fff",fontSize:12,cursor:"pointer",color:"#C53030",fontWeight:800,flexShrink:0}},"×")
-      ),
-      !url && el("label",{htmlFor:inputId,style:{
+          } catch(e) { alert("Erro ao remover: " + e.message); }
+        },style:{padding:"1px 6px",borderRadius:4,border:"1px solid "+T.border,
+          background:"#fff",fontSize:12,cursor:"pointer",color:"#C53030",fontWeight:800,flexShrink:0
+        }}, "×")
+      )),
+      el("label",{htmlFor:inputId,style:{
         display:"inline-block",padding:"6px 10px",borderRadius:6,border:"1.5px dashed "+T.border,
-        background:"#fff",fontSize:10,fontWeight:700,color:T.muted,cursor:"pointer"
-      }}, "+ Anexar plano (PDF, PPT, imagem…)"),
+        background:"#fff",fontSize:10,fontWeight:700,color:T.muted,cursor:"pointer",marginTop:planos.length>0?4:0
+      }}, planos.length > 0 ? "+ Adicionar outro" : "+ Anexar plano (PDF, PPT, imagem…)"),
       el("input",{id:inputId,type:"file",style:{display:"none"},
         onChange:async e=>{
           const f = e.target.files[0];
           if (!f) return;
           try {
             const info = await mv2_uploadPlano(sel, period, f);
-            const cur = microDays[sel]||{};
-            saveMicroDay(sel, {...cur,
-              [period+'_plano_url']: info.url,
-              [period+'_plano_path']: info.path,
-              [period+'_plano_filename']: info.filename,
-              [period+'_plano_size']: info.size
-            });
-          } catch(err) { alert("Erro ao subir arquivo: "+err.message); }
+            const cur = microDays[sel] || {};
+            const curPlanos = Array.isArray(cur[period + '_planos']) ? cur[period + '_planos'] : [];
+            saveMicroDay(sel, {...cur, [period + '_planos']: [...curPlanos, info]});
+          } catch(err) { alert("Erro ao subir arquivo: " + err.message); }
           e.target.value = '';
         }})
     );
@@ -2563,21 +2563,59 @@ function ProfilesView({athletes,profiles}) {
   const el=React.createElement;
   const [sel,setSel]=useState(null);
   const [ex,setEx]=useState("Back Squat");
-  useEffect(()=>{ if(!sel&&athletes.length>0) setSel(athletes.find(a=>resolveProfile(a.name,profiles))||athletes[0]); },[athletes]);
+  const [catFilter,setCatFilter]=useState("Todas");
+
+  // Lista de categorias com contagem
+  const cats = useMemo(() => {
+    const counts = { "Todas": athletes.length };
+    CATEGORIES.forEach(c => { counts[c] = 0; });
+    athletes.forEach(a => {
+      (a.categories || []).forEach(c => { counts[c] = (counts[c] || 0) + 1; });
+    });
+    return ["Todas", ...CATEGORIES.filter(c => counts[c] > 0)].map(c => ({name: c, count: counts[c]}));
+  }, [athletes]);
+
+  // Atletas filtrados pela categoria selecionada
+  const filteredAthletes = useMemo(() => {
+    if (catFilter === "Todas") return athletes;
+    return athletes.filter(a => (a.categories || []).includes(catFilter));
+  }, [athletes, catFilter]);
+
+  useEffect(()=>{
+    // Se atleta selecionado não está mais no filtro, escolhe o primeiro
+    if (sel && !filteredAthletes.find(a => a.id === sel.id)) {
+      setSel(filteredAthletes.find(a=>resolveProfile(a.name,profiles)) || filteredAthletes[0] || null);
+    } else if (!sel && filteredAthletes.length > 0) {
+      setSel(filteredAthletes.find(a=>resolveProfile(a.name,profiles)) || filteredAthletes[0]);
+    }
+  },[filteredAthletes]);
+
   const prof=sel?resolveProfile(sel.name,profiles):null;
   const exProf=prof?prof[ex]:null;
 
-  return el("div",{style:{display:"flex",height:"100%",overflow:"hidden",background:T.bg}},
+  return el("div",{style:{display:"flex",flex:1,minHeight:0,overflow:"hidden",background:T.bg}},
     // Sidebar
-    el("div",{style:{width:175,borderRight:"1px solid "+T.border,overflowY:"auto",background:T.card,flexShrink:0}},
-      athletes.length===0&&el("div",{style:{padding:16,fontSize:12,color:T.muted}},"Sem atletas"),
-      ...athletes.map(a=>el("div",{key:a.id,onClick:()=>setSel(a),style:{display:"flex",alignItems:"center",gap:9,padding:"9px 12px",cursor:"pointer",borderBottom:"1px solid "+T.border,borderLeft:"3px solid "+(sel&&sel.id===a.id?T.accent:"transparent"),background:sel&&sel.id===a.id?"#EBF4FF":T.card,transition:"background .1s"}},
-        el(Avatar,{name:a.name,photo:a.photo,size:28}),
-        el("div",{style:{minWidth:0}},
-          el("div",{style:{fontSize:12,fontWeight:700,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},a.nickname||a.name.split(" ")[0]),
-          el("div",{style:{fontSize:9,color:resolveProfile(a.name,profiles)?"#2563EB":T.muted}},resolveProfile(a.name,profiles)?"Perfil VBT":a.position||"—")
-        )
-      ))
+    el("div",{style:{width:200,borderRight:"1px solid "+T.border,background:T.card,flexShrink:0,display:"flex",flexDirection:"column",minHeight:0}},
+      // Filtro de categoria
+      el("div",{style:{padding:"10px 10px 8px",borderBottom:"1px solid "+T.border,flexShrink:0}},
+        el("div",{style:{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:6}},"Categoria"),
+        el("select",{
+          value:catFilter,
+          onChange:e=>setCatFilter(e.target.value),
+          style:{width:"100%",padding:"6px 8px",borderRadius:6,border:"1px solid "+T.border,fontSize:12,fontWeight:600,color:T.text,background:"#fff",cursor:"pointer",outline:"none"}
+        }, ...cats.map(c => el("option",{key:c.name,value:c.name}, c.name + " (" + c.count + ")")))
+      ),
+      // Lista de atletas
+      el("div",{style:{overflowY:"auto",flex:1,minHeight:0}},
+        filteredAthletes.length===0&&el("div",{style:{padding:16,fontSize:12,color:T.muted}},"Sem atletas nesta categoria"),
+        ...filteredAthletes.map(a=>el("div",{key:a.id,onClick:()=>setSel(a),style:{display:"flex",alignItems:"center",gap:9,padding:"9px 12px",cursor:"pointer",borderBottom:"1px solid "+T.border,borderLeft:"3px solid "+(sel&&sel.id===a.id?T.accent:"transparent"),background:sel&&sel.id===a.id?"#EBF4FF":T.card,transition:"background .1s"}},
+          el(Avatar,{name:a.name,photo:a.photo,size:28}),
+          el("div",{style:{minWidth:0}},
+            el("div",{style:{fontSize:12,fontWeight:700,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},a.nickname||a.name.split(" ")[0]),
+            el("div",{style:{fontSize:9,color:resolveProfile(a.name,profiles)?"#2563EB":T.muted}},resolveProfile(a.name,profiles)?"Perfil VBT":a.position||"—")
+          )
+        ))
+      )
     ),
     // Content
     el("div",{style:{flex:1,overflowY:"auto",padding:20}},
@@ -2721,6 +2759,8 @@ function App() {
       dob: data.dob || null, position: data.position || null,
       categories: data.categories || [], status: data.status || "ativo",
       photo_url: data.photo || null,
+      body_weight: data.body_weight != null ? data.body_weight : null,
+      height_cm: data.height_cm != null ? data.height_cm : null,
       club_id: CLUB_ID
     };
 
