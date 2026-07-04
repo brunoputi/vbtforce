@@ -614,16 +614,59 @@ function buildProfile(pts, ex) {
 function parseCSV(text, regNames) {
   const { data } = window.Papa.parse(text, { header:true, skipEmptyLines:true, dynamicTyping:true });
   const raw = {};
+  // Sessions: { name: { ex: { date: [{load, mpv, power}, ...] } } }
+  const sessions = {};
+
+  // Helper: extrai YYYY-MM-DD de qualquer formato razoável
+  const parseDate = (val) => {
+    if (!val) return null;
+    if (val instanceof Date && !isNaN(val)) return val.toISOString().slice(0,10);
+    const s = String(val).trim();
+    if (!s) return null;
+    // ISO: YYYY-MM-DD ou YYYY-MM-DDTHH:MM:SS
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) return isoMatch[0];
+    // DD/MM/YYYY ou DD-MM-YYYY (com hora opcional)
+    const brMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (brMatch) {
+      return brMatch[3] + '-' + brMatch[2].padStart(2,'0') + '-' + brMatch[1].padStart(2,'0');
+    }
+    // MM/DD/YYYY (formato US, deixo como fallback)
+    const parsed = new Date(s);
+    if (!isNaN(parsed)) return parsed.toISOString().slice(0,10);
+    return null;
+  };
+
   data.forEach(r => {
     const ex=r["Exercise Name"], name=r["Full Name"]||r["Athlete"]||r["Name"];
     const load=parseFloat(r["Weight (kg)"]||r["Load (kg)"]);
     const mpv=parseFloat(r["Mean Propulsive Velocity (m/s)"]||r["MPV"]);
     if (!EXERCISES.includes(ex)||!name||isNaN(load)||isNaN(mpv)) return;
     if (mpv<0.15||mpv>3.5||load<20) return;
+    // Potência: aceita várias variantes de nome de coluna
+    const power = parseFloat(
+      r["Mean Power (W)"] || r["Mean Power"] || r["MP"] ||
+      r["Peak Power (W)"] || r["Peak Power"] || r["PP"] ||
+      r["Power (W)"] || r["Potência Média (W)"] || r["Potência (W)"]
+    );
+    // Data da sessão
+    const date = parseDate(
+      r["Date"] || r["Session Date"] || r["Timestamp"] || r["Data"] || r["Session Datetime"]
+    );
+
     if (!raw[name]) raw[name]={};
     if (!raw[name][ex]) raw[name][ex]=[];
     raw[name][ex].push({load,mpv});
+
+    // Snapshot só é criado se tiver data
+    if (date) {
+      if (!sessions[name]) sessions[name]={};
+      if (!sessions[name][ex]) sessions[name][ex]={};
+      if (!sessions[name][ex][date]) sessions[name][ex][date]=[];
+      sessions[name][ex][date].push({load, mpv, power: isNaN(power) ? null : power});
+    }
   });
+
   const profiles={}, log=[];
   Object.entries(raw).forEach(([csv,exMap])=>{
     const m = matchName(csv, regNames);
@@ -635,7 +678,33 @@ function parseCSV(text, regNames) {
       profiles[target][ex] = buildProfile(pts, ex);
     });
   });
-  return { profiles, log };
+
+  // Constrói array de snapshots achatado com nome de atleta já resolvido (via mesmo matchName)
+  const snapshots = [];
+  Object.entries(sessions).forEach(([csv, exMap]) => {
+    const m = matchName(csv, regNames);
+    const target = m ? m.name : csv;
+    Object.entries(exMap).forEach(([ex, dateMap]) => {
+      Object.entries(dateMap).forEach(([date, reps]) => {
+        const loads = reps.map(r=>r.load);
+        const mpvs  = reps.map(r=>r.mpv);
+        const powers = reps.map(r=>r.power).filter(p=>p!=null && !isNaN(p));
+        const sessionProfile = buildProfile(reps.map(r=>({load:r.load, mpv:r.mpv})), ex);
+        snapshots.push({
+          athleteName: target,
+          exercise: ex,
+          session_date: date,
+          e1rm: sessionProfile && sessionProfile.e1rm ? Math.round(sessionProfile.e1rm) : null,
+          mean_velocity: mpvs.length ? +(mpvs.reduce((s,v)=>s+v,0)/mpvs.length).toFixed(3) : null,
+          mean_power: powers.length ? Math.round(powers.reduce((s,v)=>s+v,0)/powers.length) : null,
+          max_load: Math.max(...loads),
+          reps_count: reps.length
+        });
+      });
+    });
+  });
+
+  return { profiles, log, snapshots };
 }
 
 // ── Avatar ───────────────────────────────────────────────────────────────────
@@ -2223,8 +2292,8 @@ function AthletesView({athletes,setAthletes,profiles,setProfiles,saveAthlete,del
     setImporting(true);
     const reader=new FileReader();
     reader.onload=async ev=>{
-      const {profiles:newP,log:newLog}=parseCSV(ev.target.result,athletes.map(a=>a.name));
-      await saveProfiles(newP, athletes);
+      const {profiles:newP,log:newLog,snapshots:snapArr}=parseCSV(ev.target.result,athletes.map(a=>a.name));
+      await saveProfiles(newP, athletes, snapArr);
       setLog(newLog); setImporting(false);
     };
     reader.readAsText(file,"utf-8");
@@ -2962,10 +3031,13 @@ function BarsModal({bars,setBars,onClose}) {
 // ═══════════════════════════════════════════════════════════════════════════
 // DASHBOARD — visão consolidada com filtros de categoria e período
 // ═══════════════════════════════════════════════════════════════════════════
-function DashboardView({athletes, profiles, loadMonth, microDays}) {
+function DashboardView({athletes, profiles, loadMonth, microDays, snapshots}) {
   const el = React.createElement;
   const [cat, setCat] = useState("Todas");
   const [periodo, setPeriodo] = useState("30d"); // "7d" | "30d" | "90d"
+  const [evolAtleta, setEvolAtleta] = useState("");
+  const [evolExercicio, setEvolExercicio] = useState("Back Squat");
+  const [evolMetric, setEvolMetric] = useState("e1rm"); // "e1rm" | "mean_power" | "mean_velocity"
 
   // Filtro de atletas por categoria
   const atletasFiltrados = useMemo(() => {
@@ -3176,6 +3248,100 @@ function DashboardView({athletes, profiles, loadMonth, microDays}) {
       )
     ),
 
+    // === Widget de evolução histórica ===
+    (() => {
+      // Seletor de atleta: só atletas da categoria filtrada
+      const atletasComSnapshot = atletasFiltrados.filter(a =>
+        (snapshots || []).some(s => s.athlete_id === a.id)
+      );
+      // Atleta selecionado (default: primeiro com snapshot)
+      const atletaId = evolAtleta || (atletasComSnapshot[0] && atletasComSnapshot[0].id) || "";
+      const atleta = athletes.find(a => a.id === atletaId);
+      const serie = (snapshots || [])
+        .filter(s => s.athlete_id === atletaId && s.exercise === evolExercicio)
+        .sort((a,b) => a.session_date.localeCompare(b.session_date));
+
+      const metricLabel = evolMetric === "e1rm" ? "e1RM (kg)"
+        : evolMetric === "mean_power" ? "Potência média (W)"
+        : "Velocidade média (m/s)";
+
+      // Constrói SVG linha simples
+      const w = 700, h = 220, pl = 50, pr = 20, pt = 20, pb = 40;
+      const iw = w - pl - pr, ih = h - pt - pb;
+      const values = serie.map(s => s[evolMetric]).filter(v => v != null && !isNaN(v));
+      const vMin = values.length ? Math.min(...values) : 0;
+      const vMax = values.length ? Math.max(...values) : 1;
+      const vRange = vMax - vMin || 1;
+      const xFor = i => pl + (serie.length > 1 ? (i / (serie.length - 1)) * iw : iw/2);
+      const yFor = v => pt + ih - ((v - vMin) / vRange) * ih;
+
+      return el(Section, {
+        title: "Evolução do atleta",
+        subtitle: serie.length < 2 ? "Precisa de pelo menos 2 sessões pra desenhar linha (acumulando dados)" : serie.length + " sessão(ões) registrada(s)"
+      },
+        // Controles
+        el("div", {style:{display:"flex", gap:8, marginBottom:14, flexWrap:"wrap"}},
+          el("select", {value:atletaId, onChange:e=>setEvolAtleta(e.target.value), style:{
+            padding:"5px 8px", borderRadius:6, border:"1px solid "+T.border, fontSize:11, fontWeight:600, minWidth:180
+          }},
+            atletasComSnapshot.length === 0
+              ? el("option", {value:""}, "Sem dados históricos")
+              : atletasComSnapshot.map(a => el("option", {key:a.id, value:a.id}, a.nickname || a.name))
+          ),
+          el("select", {value:evolExercicio, onChange:e=>setEvolExercicio(e.target.value), style:{
+            padding:"5px 8px", borderRadius:6, border:"1px solid "+T.border, fontSize:11, fontWeight:600
+          }}, ...["Back Squat","Trap Bar Deadlift","Hip Thrust"].map(x => el("option",{key:x,value:x},x))),
+          el("select", {value:evolMetric, onChange:e=>setEvolMetric(e.target.value), style:{
+            padding:"5px 8px", borderRadius:6, border:"1px solid "+T.border, fontSize:11, fontWeight:600
+          }},
+            el("option",{value:"e1rm"},"e1RM"),
+            el("option",{value:"mean_power"},"Potência média"),
+            el("option",{value:"mean_velocity"},"Velocidade média")
+          )
+        ),
+        // Gráfico
+        atleta && serie.length >= 2 && values.length >= 2
+          ? el("svg", {viewBox:"0 0 "+w+" "+h, style:{width:"100%", height:"auto", maxHeight:280}},
+              // Eixo Y (3 linhas de referência)
+              [0, 0.5, 1].map((f,i) => {
+                const v = vMin + f * vRange;
+                const y = yFor(v);
+                return el("g", {key:i},
+                  el("line", {x1:pl, y1:y, x2:w-pr, y2:y, stroke:"#E2E8F0", strokeWidth:1}),
+                  el("text", {x:pl-6, y:y+3, fontSize:10, fill:"#718096", textAnchor:"end"}, v.toFixed(evolMetric==="mean_velocity"?2:0))
+                );
+              }),
+              // Linha
+              el("polyline", {
+                points: serie.filter(s => s[evolMetric] != null).map((s,i) => xFor(i) + "," + yFor(s[evolMetric])).join(" "),
+                fill:"none", stroke:T.accent, strokeWidth:2.5
+              }),
+              // Pontos
+              serie.map((s, i) => s[evolMetric] != null && el("circle", {
+                key:i, cx:xFor(i), cy:yFor(s[evolMetric]), r:4, fill:T.accent
+              })),
+              // Labels do eixo X (data)
+              serie.length <= 10
+                ? serie.map((s,i) => el("text", {
+                    key:"lbl"+i, x:xFor(i), y:h-pb+18, fontSize:9, fill:"#4A5568", textAnchor:"middle"
+                  }, s.session_date.slice(5).replace("-","/")))
+                : [serie[0], serie[Math.floor(serie.length/2)], serie[serie.length-1]].map((s,i) => {
+                    const idx = i === 0 ? 0 : i === 1 ? Math.floor(serie.length/2) : serie.length-1;
+                    return el("text", {
+                      key:"lbl"+i, x:xFor(idx), y:h-pb+18, fontSize:9, fill:"#4A5568", textAnchor:"middle"
+                    }, s.session_date.slice(5).replace("-","/"));
+                  })
+            )
+          : el("div", {style:{padding:"30px 20px", textAlign:"center", color:T.muted, fontSize:11, background:"#F7FAFC", borderRadius:8}},
+              atletasComSnapshot.length === 0
+                ? "Nenhum atleta desta categoria tem sessões registradas ainda. Importe CSV Output pra começar a acumular histórico."
+                : "Selecione outro exercício ou aguarde mais sessões (mínimo 2 para desenhar linha)."),
+        // Rodapé com métrica atual
+        atleta && values.length >= 1 && el("div", {style:{fontSize:10, color:T.muted, marginTop:8, textAlign:"right"}},
+          metricLabel + " · mín " + vMin.toFixed(evolMetric==="mean_velocity"?2:0) + " · máx " + vMax.toFixed(evolMetric==="mean_velocity"?2:0))
+      );
+    })(),
+
     // Rodapé com nota
     el("div", {style:{textAlign:"center", fontSize:10, color:T.muted, padding:"4px 0"}},
       "Categoria \"Todas\" mostra microciclo do Profissional. Selecione uma categoria específica para ver os dados dela.")
@@ -3223,6 +3389,8 @@ function App() {
         if (barsData && barsData[0]) setBars(barsData[0]);
 
         // Load inicial de microciclo v2 é sob demanda (loadMonth via MicrocycleView)
+        // Carrega snapshots históricos de sessão VBT
+        await loadSnapshots();
         setDataLoaded(true);
       } catch (e) {
         console.error("Load error:", e);
@@ -3263,7 +3431,7 @@ function App() {
   };
 
   // CSV import: takes parsed profiles + athletes, saves to Supabase
-  const saveProfiles = async (newProfilesMap, athletesList) => {
+  const saveProfiles = async (newProfilesMap, athletesList, snapshotsArr) => {
     setSyncing(true);
     const updatedProfiles = {...profiles};
 
@@ -3314,9 +3482,45 @@ function App() {
       }
     }
 
+    // Grava snapshots de sessão (evolução histórica)
+    if (Array.isArray(snapshotsArr) && snapshotsArr.length > 0) {
+      let snapOk = 0, snapErr = 0;
+      for (const s of snapshotsArr) {
+        const athlete = athletesList.find(a => a.name === s.athleteName);
+        if (!athlete) { snapErr++; continue; }
+        try {
+          await api.upsert("vbt_session_snapshots", {
+            athlete_id: athlete.id,
+            club_id: CLUB_ID,
+            exercise: s.exercise,
+            session_date: s.session_date,
+            e1rm: s.e1rm,
+            mean_power: s.mean_power,
+            mean_velocity: s.mean_velocity,
+            max_load: s.max_load,
+            reps_count: s.reps_count
+          }, "athlete_id,exercise,session_date");
+          snapOk++;
+        } catch(e) { snapErr++; console.warn("Snapshot erro:", s, e); }
+      }
+      console.log("Snapshots gravados:", snapOk, "erros:", snapErr);
+      // Recarrega snapshots do banco após inserir
+      await loadSnapshots();
+    }
+
     setProfiles(updatedProfiles);
     setSyncing(false);
   };
+
+  // Snapshots de sessão VBT (evolução histórica)
+  const [snapshots, setSnapshots] = useState([]);
+  const loadSnapshots = React.useCallback(async () => {
+    try {
+      const rows = await api.get("vbt_session_snapshots",
+        "club_id=eq." + CLUB_ID + "&order=session_date.asc&limit=5000");
+      setSnapshots(rows || []);
+    } catch(e) { console.error("Erro ao carregar snapshots:", e); }
+  }, []);
 
   const saveBars = async (newBars) => {
     setBars(newBars);
@@ -3417,7 +3621,7 @@ function App() {
     el("div", {style: {flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0}},
       error && el("div", {style: {padding: "10px 20px", background: "#FFF5F5", color: "#C53030", fontSize: 13}}, "Erro: " + error),
       !dataLoaded && el(Spinner),
-      dataLoaded && view === "dashboard" && el(DashboardView, {athletes, profiles, loadMonth, microDays}),
+      dataLoaded && view === "dashboard" && el(DashboardView, {athletes, profiles, loadMonth, microDays, snapshots}),
       dataLoaded && view === "session"  && el(SessionView,  {athletes, profiles, bars}),
       dataLoaded && view === "micro"    && el(MicrocycleView, {microDays, saveMicroDay, loadMonth, selectedCategoria, setSelectedCategoria}),
       dataLoaded && view === "athletes" && el(AthletesView, {athletes, setAthletes, profiles, setProfiles, saveAthlete, deleteAthlete, saveProfiles}),
