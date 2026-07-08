@@ -240,28 +240,40 @@ async function mv2_ensureMicrociclo(dateStr, categoria) {
   return novo;
 }
 
-// Converte um período flat (am_* ou pm_* ou pn_*) em objeto jsonb
+// Helper: gera id local pra key React de um sub-bloco
+function mv2_blockId() { return 'b' + Math.random().toString(36).slice(2, 10); }
+
+// Converte um período flat (am_blocks/pm_blocks/pn_blocks + planos) em objeto jsonb.
+// Formato jsonb: { blocks: [...], planos: [...] }
 function mv2_flatToPeriodo(flat, p) {
-  const tipo = flat[p + '_type'] || null;
-  if (!tipo) return {};
-  const o = { tipo };
-  // Campos comuns a qualquer tipo: planos anexados (array)
-  const planos = flat[p + '_planos'];
-  if (Array.isArray(planos) && planos.length > 0) {
-    o.planos = planos;
-  }
-  if (tipo === 'jogo' || tipo === 'folga' || tipo === 'viagem') return o;
-  // Treino: campos específicos
-  const grupos = flat[p + '_groups'];
-  if (grupos !== undefined && grupos !== null) o.grupos = grupos;
-  if (flat[p + '_activities']) o.atividades = flat[p + '_activities'];
-  if (flat[p + '_methodology']) o.metodologia = flat[p + '_methodology'];
-  if (flat[p + '_duration']) o.duracao = flat[p + '_duration'];
-  if (flat[p + '_zone_id']) o.zone_id = flat[p + '_zone_id'];
-  if (flat[p + '_zone_label']) o.zone_label = flat[p + '_zone_label'];
-  if (flat[p + '_series']) o.series = flat[p + '_series'];
-  if (flat[p + '_reps']) o.reps = flat[p + '_reps'];
-  return o;
+  const blocksIn = Array.isArray(flat[p + '_blocks']) ? flat[p + '_blocks'] : [];
+  const planos   = Array.isArray(flat[p + '_planos']) ? flat[p + '_planos'] : [];
+  const cleanBlocks = blocksIn
+    .filter(b => b && b.tipo)
+    .map(b => {
+      const c = { tipo: b.tipo };
+      if (b.grupos) c.grupos = b.grupos;
+      if (b.tipo === 'treino') {
+        if (b.atividades) c.atividades = b.atividades;
+        if (b.metodologia) c.metodologia = b.metodologia;
+        if (b.duracao) c.duracao = b.duracao;
+        if (b.zone_id) c.zone_id = b.zone_id;
+        if (b.zone_label) c.zone_label = b.zone_label;
+        if (b.series) c.series = b.series;
+        if (b.reps) c.reps = b.reps;
+      }
+      if (b.tipo === 'jogo') {
+        if (b.opponent) c.opponent = b.opponent;
+        if (b.game_location) c.game_location = b.game_location;
+        if (b.score) c.score = b.score;
+        if (b.competition) c.competition = b.competition;
+      }
+      return c;
+    });
+  const out = {};
+  if (cleanBlocks.length) out.blocks = cleanBlocks;
+  if (planos.length) out.planos = planos;
+  return out;
 }
 
 // Mapa: chave no jsonb dia -> prefixo flat
@@ -276,40 +288,56 @@ function mv2_nestedToFlat(dia) {
   if (dia.notas) flat.notes = dia.notas;
   MV2_PERIOD_MAP.forEach(({db, flat: p}) => {
     const o = dia['periodo_' + db] || {};
-    if (!o || !o.tipo) return;
-    flat[p + '_type'] = o.tipo;
-    // Planos anexados (formato novo: array)
+    let blocks = [];
+
+    // FORMATO NOVO: já vem com .blocks
+    if (Array.isArray(o.blocks)) {
+      blocks = o.blocks.map(b => ({ ...b, _id: b._id || mv2_blockId() }));
+    }
+    // FORMATO ANTIGO: .tipo direto no objeto — migra para 1 bloco
+    else if (o.tipo) {
+      blocks = [{
+        _id: mv2_blockId(),
+        tipo: o.tipo,
+        grupos: o.grupos,
+        atividades: o.atividades,
+        metodologia: o.metodologia,
+        duracao: o.duracao,
+        zone_id: o.zone_id,
+        zone_label: o.zone_label,
+        series: o.series,
+        reps: o.reps
+      }];
+    }
+
+    // Mescla dados legados da tabela `jogo` (persistidos separadamente antes da mudança)
+    if (Array.isArray(dia.jogo)) {
+      dia.jogo.forEach(j => {
+        if (j.periodo !== db) return;
+        let bJogo = blocks.find(b => b.tipo === 'jogo');
+        if (!bJogo) {
+          bJogo = { _id: mv2_blockId(), tipo: 'jogo' };
+          blocks.push(bJogo);
+        }
+        if (j.adversario && !bJogo.opponent) bJogo.opponent = j.adversario;
+        if (j.placar && !bJogo.score) bJogo.score = j.placar;
+        if (j.competicao && !bJogo.competition) bJogo.competition = j.competicao;
+        if (j.mando && !bJogo.game_location) bJogo.game_location = j.mando === 'casa' ? 'Casa' : 'Fora';
+      });
+    }
+
+    if (blocks.length) flat[p + '_blocks'] = blocks;
+
+    // Planos anexados (nível do período)
     if (Array.isArray(o.planos) && o.planos.length > 0) {
       flat[p + '_planos'] = o.planos;
     } else if (o.plano_url) {
-      // Compatibilidade retroativa: converte formato antigo em array de 1 item
+      // Compat retro
       flat[p + '_planos'] = [{
-        url: o.plano_url,
-        path: o.plano_path,
-        filename: o.plano_filename,
-        size: o.plano_size
+        url: o.plano_url, path: o.plano_path,
+        filename: o.plano_filename, size: o.plano_size
       }];
     }
-    if (o.tipo === 'treino') {
-      if (o.grupos !== undefined) flat[p + '_groups'] = o.grupos;
-      if (o.atividades) flat[p + '_activities'] = o.atividades;
-      if (o.metodologia) flat[p + '_methodology'] = o.metodologia;
-      if (o.duracao) flat[p + '_duration'] = o.duracao;
-      if (o.zone_id) flat[p + '_zone_id'] = o.zone_id;
-      if (o.zone_label) flat[p + '_zone_label'] = o.zone_label;
-      if (o.series) flat[p + '_series'] = o.series;
-      if (o.reps) flat[p + '_reps'] = o.reps;
-    }
-  });
-  (dia.jogo || []).forEach(j => {
-    const m = MV2_PERIOD_MAP.find(x => x.db === j.periodo);
-    if (!m) return;
-    const p = m.flat;
-    flat[p + '_type'] = 'jogo';
-    if (j.adversario) flat[p + '_opponent'] = j.adversario;
-    if (j.placar) flat[p + '_score'] = j.placar;
-    if (j.competicao) flat[p + '_competition'] = j.competicao;
-    if (j.mando) flat[p + '_game_location'] = j.mando === 'casa' ? 'Casa' : 'Fora';
   });
   return flat;
 }
@@ -387,22 +415,6 @@ async function mv2_saveDia(dateStr, flat, categoria) {
   const rDia = await api.upsert('dia', payload, 'microciclo_id,data');
   const diaId = (rDia && rDia[0] && rDia[0].id) || null;
   if (!diaId) throw new Error('Falha ao upsertar dia ' + dateStr);
-  for (const m of MV2_PERIOD_MAP) {
-    const p = m.flat;
-    if (flat[p + '_type'] === 'jogo') {
-      const mandoRaw = flat[p + '_game_location'];
-      const dados = {
-        adversario: flat[p + '_opponent'] || '(a definir)',
-        placar: flat[p + '_score'] || null,
-        competicao: flat[p + '_competition'] || null,
-        mando: mandoRaw === 'Fora' ? 'fora' : 'casa',
-        escudo_url: null
-      };
-      await apiV2.upsertJogo(diaId, m.db, dados);
-    } else {
-      await apiV2.deleteJogo(diaId, m.db);
-    }
-  }
   return diaId;
 }
 
@@ -1068,10 +1080,11 @@ function SelectAthletesModal({allActive,selected,setSelected,catFilter,onClose})
 
 // ── MICROCYCLE VIEW ──────────────────────────────────────────────────────────
 const DAY_TYPES = [
-  {id:"treino", label:"Treino", color:"#2563EB", bg:"#EFF6FF", border:"#BFDBFE"},
-  {id:"jogo",   label:"Jogo",   color:"#C53030", bg:"#FEF2F2", border:"#FECACA"},
-  {id:"folga",  label:"Folga",  color:"#64748B", bg:"#F8FAFC", border:"#E2E8F0"},
-  {id:"viagem", label:"Viagem", color:"#D97706", bg:"#FFFBEB", border:"#FDE68A"},
+  {id:"treino",       label:"Treino",       color:"#2563EB", bg:"#EFF6FF", border:"#BFDBFE"},
+  {id:"jogo",         label:"Jogo",         color:"#C53030", bg:"#FEF2F2", border:"#FECACA"},
+  {id:"folga",        label:"Folga",        color:"#64748B", bg:"#F8FAFC", border:"#E2E8F0"},
+  {id:"viagem",       label:"Viagem",       color:"#D97706", bg:"#FFFBEB", border:"#FDE68A"},
+  {id:"concentracao", label:"Concentração", color:"#805AD5", bg:"#FAF5FF", border:"#D6BCFA"},
 ];
 const WEEKDAYS = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"];
 
@@ -1188,17 +1201,23 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
     dates.filter(d=>d.cur).forEach(d=>{
       const dy=microDays[d.date];
       if(!dy) return;
-      const { am_type, pm_type, pn_type } = derivePeriodTypes(dy);
-      if (am_type==="treino" || pm_type==="treino" || pn_type==="treino") treinos++;
-      if (am_type==="jogo"   || pm_type==="jogo"   || pn_type==="jogo")   jogos++;
-      [["am",am_type],["pm",pm_type],["pn",pn_type]].forEach(([p,tp])=>{
-        if (tp !== "treino") return;
-        const acts = dy[p + "_activities"] || "";
-        if (acts.includes("Campo"))      campo++;
-        if (acts.includes("Academia"))   aca++;
-        if (acts.includes("Corretivos")) corr++;
-        if (acts.includes("Fisio"))      fisio++;
+      let hasTreinoDia = false, hasJogoDia = false;
+      ["am","pm","pn"].forEach(p => {
+        const blocks = Array.isArray(dy[p + "_blocks"]) ? dy[p + "_blocks"] : [];
+        blocks.forEach(b => {
+          if (b.tipo === "treino") {
+            hasTreinoDia = true;
+            const acts = b.atividades || "";
+            if (acts.includes("Campo"))      campo++;
+            if (acts.includes("Academia"))   aca++;
+            if (acts.includes("Corretivos")) corr++;
+            if (acts.includes("Fisio"))      fisio++;
+          }
+          if (b.tipo === "jogo") hasJogoDia = true;
+        });
       });
+      if (hasTreinoDia) treinos++;
+      if (hasJogoDia) jogos++;
     });
     return {treinos, jogos, campo, aca, corr, fisio};
   }, [dates, microDays]);
@@ -1246,16 +1265,14 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
   const setDN = (ds,n) => saveMicroDay(ds,{...(microDays[ds]||{}),notes:n});
 
   const sd = sel ? (microDays[sel]||{}) : null;
-  const sdTypes = sel ? derivePeriodTypes(sd) : { am_type:null, pm_type:null };
-  const sz = sd&&sd.zone_id ? ZONES.find(z=>z.id===sd.zone_id) : null;
 
-  // Renderiza uma metade da célula (manhã, tarde ou noite) com muita informação
+  // Renderiza uma metade da célula (manhã, tarde ou noite) — itera sub-blocos
   const renderHalf = (dd, period, cur) => {
-    const tp = dd[period + "_type"] || null;
-    const dt = tp ? DAY_TYPES.find(t=>t.id===tp) : null;
+    const blocks = Array.isArray(dd[period + "_blocks"]) ? dd[period + "_blocks"] : [];
     const label = period === "am" ? "M" : period === "pm" ? "T" : "N";
 
-    if (!dt) {
+    // Vazio
+    if (blocks.length === 0) {
       return el("div",{style:{flex:1,minHeight:0,padding:"3px 6px",
         display:"flex",alignItems:"center",gap:4}},
         el("span",{style:{fontSize:8,fontWeight:800,color:"#CBD5E0",letterSpacing:".05em"}},label),
@@ -1263,103 +1280,135 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
       );
     }
 
-    // Treino: mostrar grupos + atividades + VBT / metodologia
-    if (tp === "treino") {
-      const grps = getPeriodGroups(dd, period);
-      const acts = dd[period + "_activities"] || "";
-      const meth = dd[period + "_methodology"] || "";
-      const zid  = getPeriodZoneId(dd, period);
-      const zone = zid ? ZONES.find(z=>z.id===zid) : null;
-      const s = getPeriodSeries(dd, period);
-      const r = getPeriodReps(dd, period);
-      // Rótulo dinâmico: reflete as atividades escolhidas
-      const actList = acts.split(",").filter(Boolean);
-      let mainLabel = "TREINO";
-      if (actList.length > 0) {
-        // Abreviações: Campo, Acad., Corr., Fisio
-        const abbrev = { "Campo":"CAMPO", "Academia":"ACAD.", "Corretivos":"CORR.", "Fisio":"FISIO" };
-        mainLabel = actList.map(a=>abbrev[a]||a.toUpperCase()).join(" + ");
-      }
-      // Linha "método": prioriza VBT (zona + série×reps), depois texto livre
-      let methodLine = null;
-      let methodColor = "#334155";
-      if (zone) {
-        const ss = s || 3, rr = r || 5;
-        methodLine = zone.label.split(" ")[0] + " · " + ss + "×" + rr;
-        methodColor = zone.color;
-      } else if (meth) {
-        methodLine = meth;
-      }
-      return el("div",{style:{
-        flex:1, minHeight:0, padding:"4px 7px",
-        background: cur ? dt.bg : "transparent",
-        borderLeft:"3px solid "+dt.color,
-        display:"flex", flexDirection:"column", gap:2, overflow:"hidden"
-      }},
-        el("div",{style:{display:"flex",alignItems:"center",gap:4,minWidth:0}},
-          el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".05em",flexShrink:0,opacity:.75}},label),
-          el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".03em",
-            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, mainLabel)
-        ),
-        grps && el("div",{style:{fontSize:10,fontWeight:600,color:"#1E293B",
-          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, grps),
-        methodLine && el("div",{style:{fontSize:9.5,fontWeight:500,color:methodColor,opacity:.9,
-          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, methodLine)
-      );
-    }
-
-    // Jogo: adversário + placar
-    if (tp === "jogo") {
-      const op   = dd[period + "_opponent"];
-      const loc  = dd[period + "_game_location"];
-      const sc   = dd[period + "_score"];
-      const comp = dd[period + "_competition"];
-      return el("div",{style:{
-        flex:1, minHeight:0, padding:"3px 6px",
-        background: cur ? dt.bg : "transparent",
-        borderLeft:"3px solid "+dt.color,
-        display:"flex", flexDirection:"column", gap:1, overflow:"hidden"
-      }},
-        el("div",{style:{display:"flex",alignItems:"center",gap:4}},
-          el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".05em",opacity:.75}},label),
-          el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".03em"}},"JOGO")
-        ),
-        el("div",{style:{fontSize:10,fontWeight:600,color:dt.color,
-          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
-          (loc ? loc.toUpperCase()+" · " : "") + (op || "—")),
-        sc && el("div",{style:{fontSize:9.5,fontWeight:500,color:"#475569"}}, sc),
-        comp && !sc && el("div",{style:{fontSize:8,color:"#64748B",
-          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, comp)
-      );
-    }
-
-    // Folga / Viagem: só o label
+    // Container flex column com uma linha por sub-bloco
     return el("div",{style:{
-      flex:1, minHeight:0, padding:"3px 6px",
-      background: cur ? dt.bg : "transparent",
-      borderLeft:"3px solid "+dt.color,
-      display:"flex", alignItems:"center", gap:5
+      flex:1, minHeight:0,
+      display:"flex", flexDirection:"column", overflow:"visible"
     }},
-      el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".05em",opacity:.75}},label),
-      el("span",{style:{fontSize:9.5,fontWeight:700,color:dt.color,textTransform:"uppercase",letterSpacing:".05em"}}, dt.label)
+      ...blocks.map((b, idx) => {
+        const dt = b.tipo ? DAY_TYPES.find(t=>t.id===b.tipo) : null;
+        if (!dt) {
+          // Bloco sem tipo definido — mostra placeholder discreto
+          return el("div",{key:b._id||idx,style:{
+            padding:"2px 6px", background:"#F1F5F9",
+            borderLeft:"2px solid #CBD5E0",
+            display:"flex", alignItems:"center", gap:4, overflow:"hidden",
+            flexShrink:0
+          }},
+            idx === 0 && el("span",{style:{fontSize:8,fontWeight:800,color:"#94A3B8",letterSpacing:".05em",flexShrink:0}},label),
+            el("span",{style:{fontSize:8.5,color:"#64748B",fontStyle:"italic"}}, "(tipo indefinido)")
+          );
+        }
+
+        // Conteúdo linha por tipo
+        const showLabelBadge = idx === 0;
+        let mainLabel = "";
+        let sub1 = null, sub2 = null;
+
+        if (b.tipo === "treino") {
+          const acts = (b.atividades || "").split(",").filter(Boolean);
+          const abbrev = { "Campo":"CAMPO", "Academia":"ACAD.", "Corretivos":"CORR.", "Fisio":"FISIO" };
+          mainLabel = acts.length ? acts.map(a=>abbrev[a]||a.toUpperCase()).join(" + ") : "TREINO";
+          if (b.grupos) sub1 = b.grupos;
+          const zone = b.zone_id ? ZONES.find(z=>z.id===b.zone_id) : null;
+          if (zone) {
+            sub2 = { text: zone.label.split(" ")[0] + " · " + (b.series||3) + "×" + (b.reps||5), color: zone.color };
+          } else if (b.metodologia) {
+            sub2 = { text: b.metodologia, color: "#334155" };
+          }
+        } else if (b.tipo === "jogo") {
+          mainLabel = "JOGO";
+          const loc = b.game_location;
+          const op = b.opponent;
+          if (loc || op) sub1 = (loc ? loc.toUpperCase() + " · " : "") + (op || "—");
+          if (b.score) sub2 = { text: b.score, color: "#475569" };
+          else if (b.grupos) sub2 = { text: b.grupos, color: "#1E293B" };
+        } else {
+          // folga, viagem, concentracao
+          mainLabel = dt.label.toUpperCase();
+          if (b.grupos) sub1 = b.grupos;
+        }
+
+        return el("div",{key:b._id||idx,style:{
+          padding: "3px 6px",
+          background: cur ? dt.bg : "transparent",
+          borderLeft: "3px solid " + dt.color,
+          borderBottom: idx < blocks.length - 1 ? "1px solid " + dt.color + "22" : "none",
+          display:"flex", flexDirection:"column", gap:1, overflow:"hidden", minWidth:0,
+          flexShrink:0
+        }},
+          el("div",{style:{display:"flex",alignItems:"center",gap:4,minWidth:0}},
+            showLabelBadge && el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".05em",flexShrink:0,opacity:.75}},label),
+            el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".03em",
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, mainLabel)
+          ),
+          sub1 && el("div",{style:{fontSize:9.5,fontWeight:600,color:"#1E293B",
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sub1),
+          sub2 && el("div",{style:{fontSize:9,fontWeight:500,color:sub2.color,opacity:.9,
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sub2.text)
+        );
+      })
     );
   };
 
   // Renderiza bloco de grupos para um período no painel lateral
-  const renderGroupsForPeriod = (period) => {
-    const key = period + "_groups";
-    const grps = (getPeriodGroups(sd, period)).split(",").filter(Boolean);
+  // === Helpers de sub-blocos por período ===
+  const getBlocks = (period) => Array.isArray(sd && sd[period + '_blocks']) ? sd[period + '_blocks'] : [];
+  const setBlocks = (period, newBlocks) => {
+    saveMicroDay(sel, {...sd, [period + '_blocks']: newBlocks.length ? newBlocks : null});
+  };
+  const addBlock = (period, tipo) => {
+    setBlocks(period, [...getBlocks(period), { _id: mv2_blockId(), tipo: tipo || null }]);
+  };
+  const updateBlock = (period, blockId, updates) => {
+    setBlocks(period, getBlocks(period).map(b => b._id === blockId ? {...b, ...updates} : b));
+  };
+  const removeBlock = (period, blockId) => {
+    setBlocks(period, getBlocks(period).filter(b => b._id !== blockId));
+  };
+
+  // Toggle grupo dentro de um bloco (aceita G1,G2,G3,G4,DM,RTP)
+  const toggleBlockGroup = (period, blockId, g) => {
+    const block = getBlocks(period).find(b => b._id === blockId);
+    if (!block) return;
+    const cur = (block.grupos || '').split(',').filter(Boolean);
+    const next = cur.includes(g) ? cur.filter(x => x !== g) : [...cur, g];
+    updateBlock(period, blockId, { grupos: next.join(',') });
+  };
+
+  // Toggle atividade (Campo, Academia, Corretivos, Fisio) dentro de bloco treino
+  const toggleBlockActivity = (period, blockId, act) => {
+    const block = getBlocks(period).find(b => b._id === blockId);
+    if (!block) return;
+    const cur = (block.atividades || '').split(',').filter(Boolean);
+    const next = cur.includes(act) ? cur.filter(x => x !== act) : [...cur, act];
+    updateBlock(period, blockId, { atividades: next.join(',') });
+  };
+
+  // Seleciona zona VBT no bloco
+  const setBlockZone = (period, blockId, zid) => {
+    const block = getBlocks(period).find(b => b._id === blockId);
+    if (!block) return;
+    if (block.zone_id === zid) {
+      updateBlock(period, blockId, { zone_id: null, zone_label: '' });
+    } else {
+      const z = ZONES.find(x => x.id === zid);
+      updateBlock(period, blockId, { zone_id: zid, zone_label: z ? z.label : '' });
+    }
+  };
+
+  // === Componentes de renderização de sub-bloco ===
+
+  // Bloco de grupos (usado em qualquer tipo com grupos)
+  const renderBlockGroups = (period, block) => {
+    const grps = (block.grupos || '').split(',').filter(Boolean);
     return el("div",{style:{marginBottom:8}},
       el("div",{style:{fontSize:8,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4,letterSpacing:".05em"}},"Grupos"),
       el("div",{style:{display:"flex",gap:3,flexWrap:"wrap"}},
         ...["G1","G2","G3","G4","DM","RTP"].map(g=>{
           const on = grps.includes(g);
           const gc = g==="DM"?"#C53030":g==="RTP"?"#DD6B20":"#2563EB";
-          return el("button",{key:g,onClick:()=>{
-            const cur = grps.slice();
-            const next = on ? cur.filter(x=>x!==g) : [...cur, g];
-            setDV(sel, key, next.join(","));
-          },style:{
+          return el("button",{key:g,onClick:()=>toggleBlockGroup(period, block._id, g),style:{
             padding:"2px 7px",borderRadius:5,fontSize:9,fontWeight:800,cursor:"pointer",
             border:"1.5px solid "+(on?gc:T.border),
             background:on?gc+"15":"#fff",color:on?gc:T.muted
@@ -1369,21 +1418,19 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
     );
   };
 
-  // Bloco VBT (zona + série×reps) para um período. Só aparece se atividade Academia marcada.
-  const renderVBTForPeriod = (period) => {
-    const acts = sd[period + "_activities"] || "";
-    if (!acts.split(",").includes("Academia")) return null;
-    const zid = getPeriodZoneId(sd, period);
+  // Bloco de zona VBT (só se Academia marcada como atividade)
+  const renderBlockVBT = (period, block) => {
+    const acts = (block.atividades || '').split(',');
+    if (!acts.includes("Academia")) return null;
+    const zid = block.zone_id || null;
     const zone = zid ? ZONES.find(z=>z.id===zid) : null;
-    const s = getPeriodSeries(sd, period) || 3;
-    const r = getPeriodReps(sd, period) || 5;
-    const sKey = period + "_series";
-    const rKey = period + "_reps";
+    const s = block.series || 3;
+    const r = block.reps || 5;
     return el("div",{style:{marginTop:8,paddingTop:8,borderTop:"1px dashed "+T.border+"88"}},
       el("div",{style:{fontSize:8,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4,letterSpacing:".05em"}},"Zona VBT (academia)"),
       el("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:3,marginBottom:6}},
         ...ZONES.map(z=>
-          el("button",{key:z.id,onClick:()=>setDZ(sel,period,z.id),style:{
+          el("button",{key:z.id,onClick:()=>setBlockZone(period, block._id, z.id),style:{
             padding:"4px",borderRadius:5,fontSize:10,fontWeight:700,cursor:"pointer",
             border:"1.5px solid "+(zid===z.id?z.color:T.border+"66"),
             background:zid===z.id?z.color:"transparent",
@@ -1398,12 +1445,12 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
       el("div",{style:{display:"flex",gap:6,alignItems:"center"}},
         el("span",{style:{fontSize:10,color:T.muted,fontWeight:700}},"Séries"),
         el("input",{type:"number",min:1,max:8,value:s,
-          onChange:e=>setDV(sel,sKey,+e.target.value),
+          onChange:e=>updateBlock(period, block._id, {series: +e.target.value || null}),
           style:{width:36,textAlign:"center",padding:"3px",borderRadius:5,
             border:"1px solid "+T.border,fontSize:13,fontWeight:800}}),
         el("span",{style:{fontSize:13,color:T.muted,fontWeight:800}},"×"),
         el("input",{type:"number",min:1,max:12,value:r,
-          onChange:e=>setDV(sel,rKey,+e.target.value),
+          onChange:e=>updateBlock(period, block._id, {reps: +e.target.value || null}),
           style:{width:36,textAlign:"center",padding:"3px",borderRadius:5,
             border:"1px solid "+T.border,fontSize:13,fontWeight:800}}),
         el("span",{style:{fontSize:10,color:T.muted,fontWeight:700}},"Reps")
@@ -1411,7 +1458,117 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
     );
   };
 
-  // Bloco de plano anexado (funciona pra qualquer tipo de período)
+  // Um sub-bloco completo (com header de tipo + campos por tipo)
+  const renderBlock = (period, block, palette) => {
+    const dt = block.tipo ? DAY_TYPES.find(t => t.id === block.tipo) : null;
+    return el("div", {key: block._id, style: {
+      border: "1px solid " + (dt ? dt.color + "55" : T.border),
+      borderRadius: 8,
+      padding: "8px 10px",
+      marginBottom: 6,
+      background: "#fff"
+    }},
+      // Header: seletor de tipo + botão remover
+      el("div", {style: {display:"flex", alignItems:"center", gap:6, marginBottom:8}},
+        el("select", {value: block.tipo || '',
+          onChange: e => updateBlock(period, block._id, {tipo: e.target.value || null}),
+          style: {flex:1, padding:"5px 7px", borderRadius:5,
+            border: "1.5px solid " + (dt ? dt.color : T.border),
+            fontSize:11, fontWeight:800,
+            color: dt ? dt.color : T.muted,
+            background: dt ? dt.bg : "#fff"}
+        },
+          el("option", {value:""}, "— tipo —"),
+          ...DAY_TYPES.map(t => el("option", {key:t.id, value:t.id}, t.label))
+        ),
+        el("button", {onClick: () => {
+          if (confirm("Remover este sub-bloco?")) removeBlock(period, block._id);
+        }, style:{
+          padding:"3px 8px", borderRadius:5, border:"1px solid "+T.border, background:"#fff",
+          fontSize:12, cursor:"pointer", color:"#C53030", fontWeight:800
+        }}, "×")
+      ),
+      // Grupos (aparece pra todos os tipos exceto folga; opcional pra folga também na verdade)
+      block.tipo && renderBlockGroups(period, block),
+      // Campos específicos do tipo TREINO
+      block.tipo === "treino" && el("div",null,
+        el("div",{style:{fontSize:8,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4,letterSpacing:".05em"}},"Atividades"),
+        el("div",{style:{display:"flex",gap:3,marginBottom:8,flexWrap:"wrap"}},
+          ...["Campo","Academia","Corretivos","Fisio"].map(st => {
+            const acts = (block.atividades || '').split(',');
+            const on = acts.includes(st);
+            return el("button",{key:st,onClick:()=>toggleBlockActivity(period, block._id, st),style:{
+              padding:"2px 7px",borderRadius:5,fontSize:9,fontWeight:700,cursor:"pointer",
+              border:"1px solid "+(on?"#D97706":T.border),
+              background:on?"#FEF3C7":"#fff",color:on?"#D97706":T.muted}},st);
+          })
+        ),
+        el("input",{value: block.metodologia || '',
+          onChange: e => updateBlock(period, block._id, {metodologia: e.target.value}),
+          onBlur: e => handleMethBlur(e.target.value),
+          list:"metodologias-memoria", placeholder:"Metodologia...",
+          style:{width:"100%",padding:"5px 7px",borderRadius:5,border:"1px solid "+palette.borderInput,
+            fontSize:11,outline:"none",marginBottom:6,background:"#fff"}}),
+        el("div",{style:{display:"flex",gap:6,alignItems:"center"}},
+          el("span",{style:{fontSize:9,color:T.muted,fontWeight:700}},"Duração"),
+          el("input",{type:"number",min:0,max:300,step:5,value: block.duracao || '',
+            onChange: e => updateBlock(period, block._id, {duracao: +e.target.value || null}),
+            placeholder:"min",
+            style:{width:44,textAlign:"center",padding:"3px",borderRadius:5,
+              border:"1px solid "+palette.borderInput,fontSize:11,fontWeight:800}}),
+          el("span",{style:{fontSize:9,color:T.muted}},"min")
+        ),
+        renderBlockVBT(period, block)
+      ),
+      // Campos específicos do tipo JOGO
+      block.tipo === "jogo" && el("div",null,
+        el("div",{style:{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4}},"Mando"),
+        el("div",{style:{display:"flex",gap:5,marginBottom:8}},
+          ...["Casa","Fora"].map(loc =>
+            el("button",{key:loc,
+              onClick: ()=> updateBlock(period, block._id, {game_location: loc}),
+              style:{flex:1,padding:"5px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",
+                border:"1.5px solid "+(block.game_location===loc?"#C53030":T.border),
+                background:block.game_location===loc?"#C53030":"#fff",
+                color:block.game_location===loc?"#fff":T.muted}}, loc)
+          )
+        ),
+        el("input",{value: block.opponent || '',
+          onChange: e => updateBlock(period, block._id, {opponent: e.target.value}),
+          placeholder:"Adversário", list:"teams-list",
+          style:{width:"100%",padding:"6px 8px",borderRadius:6,border:"1px solid "+T.border,
+            fontSize:12,fontWeight:700,outline:"none",marginBottom:6}}),
+        el("input",{value: block.competition || '',
+          onChange: e => updateBlock(period, block._id, {competition: e.target.value}),
+          placeholder:"Competição", list:"comp-list",
+          style:{width:"100%",padding:"5px 7px",borderRadius:6,border:"1px solid "+T.border,
+            fontSize:11,outline:"none",marginBottom:6}}),
+        el("input",{value: block.score || '',
+          onChange: e => updateBlock(period, block._id, {score: e.target.value}),
+          placeholder:"Placar (ex: 2 x 1)",
+          style:{width:"100%",padding:"5px 7px",borderRadius:6,border:"1px solid "+T.border,
+            fontSize:11,outline:"none"}})
+      )
+    );
+  };
+
+  // Painel inteiro de um período (manhã, tarde ou noite): lista de blocks + botão adicionar
+  const renderPeriodPanel = (period, palette) => {
+    const blocks = getBlocks(period);
+    return el("div",{style:{background:palette.bg,border:"1px solid "+palette.border,borderRadius:8,
+      padding:"10px 12px",marginBottom:10}},
+      el("div",{style:{fontSize:10,fontWeight:800,color:palette.headerColor,marginBottom:8,letterSpacing:".05em"}}, palette.label),
+      ...blocks.map(b => renderBlock(period, b, palette)),
+      el("button",{onClick: () => addBlock(period, null), style:{
+        width:"100%", padding:"6px", borderRadius:6, marginBottom: blocks.length > 0 ? 6 : 0,
+        cursor:"pointer", border:"1.5px dashed "+palette.border, background:"transparent",
+        color:palette.headerColor, fontSize:11, fontWeight:700
+      }}, blocks.length > 0 ? "+ Adicionar outro sub-bloco" : "+ Adicionar sub-bloco"),
+      blocks.length > 0 && renderPlanoAnexo(period)
+    );
+  };
+
+  // Bloco de plano anexado (fica no NÍVEL DO PERÍODO — não do sub-bloco)
   const renderPlanoAnexo = (period) => {
     const planos = Array.isArray(sd[period + '_planos']) ? sd[period + '_planos'] : [];
     const inputId = 'plano-input-' + period + '-' + sel;
@@ -1545,10 +1702,36 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
           ...dates.map(({date,day,cur})=>{
             const dd=microDays[date]||{};
             const isT=date===todayStr, isS=date===sel;
-            const hasNoite = !!(dd.pn_type);
-            const hasAny = !!(dd.am_type || dd.pm_type || dd.pn_type);
+            const amBlocks = Array.isArray(dd.am_blocks) ? dd.am_blocks : [];
+            const pmBlocks = Array.isArray(dd.pm_blocks) ? dd.pm_blocks : [];
+            const pnBlocks = Array.isArray(dd.pn_blocks) ? dd.pn_blocks : [];
+            const hasNoite = pnBlocks.length > 0;
+            const hasAm = amBlocks.length > 0;
+            const hasPm = pmBlocks.length > 0;
+            const hasAny = hasAm || hasPm || hasNoite;
+            // Altura por bloco depende do tipo (treino precisa de mais espaço)
+            const blockH = (b) => {
+              if (!b || !b.tipo) return 22;
+              if (b.tipo === "treino") {
+                let h = 42; // rótulo + 1 linha
+                if (b.grupos) h += 14;
+                if (b.zone_id || b.metodologia) h += 14;
+                return h;
+              }
+              if (b.tipo === "jogo") {
+                let h = 42;
+                if (b.opponent || b.game_location) h += 14;
+                if (b.score) h += 14;
+                if (b.grupos) h += 14;
+                return h;
+              }
+              // folga / viagem / concentracao
+              return b.grupos ? 38 : 22;
+            };
+            const totalH = [...amBlocks, ...pmBlocks, ...pnBlocks].reduce((s,b) => s + blockH(b), 0);
+            const minH = Math.max(128, 32 + totalH);
             const cellStyle = {
-              minHeight: (hasNoite ? 172 : 128), borderRadius:8, cursor:"pointer",
+              minHeight: minH, borderRadius:8, cursor:"pointer",
               border: isS && !exporting ? "2px solid "+T.accent
                     : isT && !exporting ? "2px solid #CBD5E0"
                     : "1px solid "+T.border+"66",
@@ -1566,7 +1749,7 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
               // Manhã
               renderHalf(dd, "am", cur),
               // Divisor (só se manhã E tarde têm conteúdo)
-              (dd.am_type && dd.pm_type) && el("div",{style:{height:1,background:T.border+"55",flexShrink:0}}),
+              (hasAm && hasPm) && el("div",{style:{height:1,background:T.border+"55",flexShrink:0}}),
               // Tarde
               renderHalf(dd, "pm", cur),
               // Noite (só se hasNoite)
@@ -1586,261 +1769,10 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
           el("div",{style:{fontSize:11,color:T.muted,marginTop:2}},sel)
         ),
 
-        // ═══════════ MANHÃ ═══════════
-        el("div",{style:{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8,
-          padding:"10px 12px",marginBottom:10}},
-          el("div",{style:{fontSize:10,fontWeight:800,color:"#D97706",marginBottom:8,letterSpacing:".05em"}},"MANHÃ"),
-          // Tipo do período
-          el("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,marginBottom:10}},
-            ...DAY_TYPES.map(t=>
-              el("button",{key:t.id,onClick:()=>setDT(sel,"am",t.id),style:{
-                padding:"5px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",
-                border:"1.5px solid "+(sdTypes.am_type===t.id?t.color:T.border),
-                background:sdTypes.am_type===t.id?t.color:"#fff",
-                color:sdTypes.am_type===t.id?"#fff":T.muted
-              }},t.label)
-            )
-          ),
-
-          // TREINO — manhã
-          sdTypes.am_type==="treino"&&el("div",null,
-            renderGroupsForPeriod("am"),
-            el("div",{style:{fontSize:8,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4,letterSpacing:".05em"}},"Atividades"),
-            el("div",{style:{display:"flex",gap:3,marginBottom:8,flexWrap:"wrap"}},
-              ...(()=>{
-                const acts=sd.am_activities?sd.am_activities.split(","):[];
-                return ["Campo","Academia","Corretivos","Fisio"].map(st=>{
-                  const on=acts.includes(st);
-                  return el("button",{key:st,onClick:()=>{
-                    const cur=sd.am_activities?sd.am_activities.split(",").filter(Boolean):[];
-                    const next=on?cur.filter(x=>x!==st):[...cur,st];
-                    setDV(sel,"am_activities",next.join(","));
-                  },style:{padding:"2px 7px",borderRadius:5,fontSize:9,fontWeight:700,cursor:"pointer",
-                    border:"1px solid "+(on?"#D97706":T.border),
-                    background:on?"#FEF3C7":"#fff",color:on?"#D97706":T.muted}},st);
-                });
-              })()
-            ),
-            el("input",{value:sd.am_methodology||"",onChange:e=>setDV(sel,"am_methodology",e.target.value),
-              onBlur:e=>handleMethBlur(e.target.value),
-              list:"metodologias-memoria",
-              placeholder:"Metodologia...",
-              style:{width:"100%",padding:"5px 7px",borderRadius:5,border:"1px solid #FDE68A",
-                fontSize:11,outline:"none",marginBottom:6,background:"#fff"}}),
-            el("div",{style:{display:"flex",gap:6,alignItems:"center"}},
-              el("span",{style:{fontSize:9,color:T.muted,fontWeight:700}},"Duração"),
-              el("input",{type:"number",min:0,max:300,step:5,value:sd.am_duration||"",
-                onChange:e=>setDV(sel,"am_duration",+e.target.value||null),placeholder:"min",
-                style:{width:44,textAlign:"center",padding:"3px",borderRadius:5,
-                  border:"1px solid #FDE68A",fontSize:11,fontWeight:800}}),
-              el("span",{style:{fontSize:9,color:T.muted}},"min")
-            ),
-            renderVBTForPeriod("am")
-          ),
-
-          // JOGO — manhã
-          sdTypes.am_type==="jogo"&&el("div",null,
-            el("div",{style:{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4}},"Mando"),
-            el("div",{style:{display:"flex",gap:5,marginBottom:8}},
-              ...["Casa","Fora"].map(loc=>
-                el("button",{key:loc,onClick:()=>setDV(sel,"am_game_location",loc),style:{
-                  flex:1,padding:"5px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",
-                  border:"1.5px solid "+(sd.am_game_location===loc?"#C53030":T.border),
-                  background:sd.am_game_location===loc?"#C53030":"#fff",
-                  color:sd.am_game_location===loc?"#fff":T.muted
-                }},loc)
-              )
-            ),
-            el("input",{value:sd.am_opponent||"",onChange:e=>setDV(sel,"am_opponent",e.target.value),
-              placeholder:"Adversário",list:"teams-list",
-              style:{width:"100%",padding:"6px 8px",borderRadius:6,border:"1px solid "+T.border,
-                fontSize:12,fontWeight:700,outline:"none",marginBottom:6}}),
-            el("input",{value:sd.am_competition||"",onChange:e=>setDV(sel,"am_competition",e.target.value),
-              placeholder:"Competição",list:"comp-list",
-              style:{width:"100%",padding:"5px 7px",borderRadius:6,border:"1px solid "+T.border,
-                fontSize:11,outline:"none",marginBottom:6}}),
-            el("input",{value:sd.am_score||"",onChange:e=>setDV(sel,"am_score",e.target.value),
-              placeholder:"Placar (ex: 2 x 1)",
-              style:{width:"100%",padding:"5px 7px",borderRadius:6,border:"1px solid "+T.border,
-                fontSize:11,outline:"none"}})
-          ),
-          sdTypes.am_type && renderPlanoAnexo("am")
-        ),
-
-        // ═══════════ TARDE ═══════════
-        el("div",{style:{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:8,
-          padding:"10px 12px",marginBottom:10}},
-          el("div",{style:{fontSize:10,fontWeight:800,color:"#2563EB",marginBottom:8,letterSpacing:".05em"}},"TARDE"),
-          el("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,marginBottom:10}},
-            ...DAY_TYPES.map(t=>
-              el("button",{key:t.id,onClick:()=>setDT(sel,"pm",t.id),style:{
-                padding:"5px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",
-                border:"1.5px solid "+(sdTypes.pm_type===t.id?t.color:T.border),
-                background:sdTypes.pm_type===t.id?t.color:"#fff",
-                color:sdTypes.pm_type===t.id?"#fff":T.muted
-              }},t.label)
-            )
-          ),
-
-          // TREINO — tarde
-          sdTypes.pm_type==="treino"&&el("div",null,
-            renderGroupsForPeriod("pm"),
-            el("div",{style:{fontSize:8,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4,letterSpacing:".05em"}},"Atividades"),
-            el("div",{style:{display:"flex",gap:3,marginBottom:8,flexWrap:"wrap"}},
-              ...(()=>{
-                const acts=sd.pm_activities?sd.pm_activities.split(","):[];
-                return ["Campo","Academia","Corretivos","Fisio"].map(st=>{
-                  const on=acts.includes(st);
-                  return el("button",{key:st,onClick:()=>{
-                    const cur=sd.pm_activities?sd.pm_activities.split(",").filter(Boolean):[];
-                    const next=on?cur.filter(x=>x!==st):[...cur,st];
-                    setDV(sel,"pm_activities",next.join(","));
-                  },style:{padding:"2px 7px",borderRadius:5,fontSize:9,fontWeight:700,cursor:"pointer",
-                    border:"1px solid "+(on?"#2563EB":T.border),
-                    background:on?"#DBEAFE":"#fff",color:on?"#2563EB":T.muted}},st);
-                });
-              })()
-            ),
-            el("input",{value:sd.pm_methodology||"",onChange:e=>setDV(sel,"pm_methodology",e.target.value),
-              onBlur:e=>handleMethBlur(e.target.value),
-              list:"metodologias-memoria",
-              placeholder:"Metodologia...",
-              style:{width:"100%",padding:"5px 7px",borderRadius:5,border:"1px solid #BFDBFE",
-                fontSize:11,outline:"none",marginBottom:6,background:"#fff"}}),
-            el("div",{style:{display:"flex",gap:6,alignItems:"center"}},
-              el("span",{style:{fontSize:9,color:T.muted,fontWeight:700}},"Duração"),
-              el("input",{type:"number",min:0,max:300,step:5,value:sd.pm_duration||"",
-                onChange:e=>setDV(sel,"pm_duration",+e.target.value||null),placeholder:"min",
-                style:{width:44,textAlign:"center",padding:"3px",borderRadius:5,
-                  border:"1px solid #BFDBFE",fontSize:11,fontWeight:800}}),
-              el("span",{style:{fontSize:9,color:T.muted}},"min")
-            ),
-            renderVBTForPeriod("pm")
-          ),
-
-          // JOGO — tarde
-          sdTypes.pm_type==="jogo"&&el("div",null,
-            el("div",{style:{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4}},"Mando"),
-            el("div",{style:{display:"flex",gap:5,marginBottom:8}},
-              ...["Casa","Fora"].map(loc=>
-                el("button",{key:loc,onClick:()=>setDV(sel,"pm_game_location",loc),style:{
-                  flex:1,padding:"5px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",
-                  border:"1.5px solid "+(sd.pm_game_location===loc?"#C53030":T.border),
-                  background:sd.pm_game_location===loc?"#C53030":"#fff",
-                  color:sd.pm_game_location===loc?"#fff":T.muted
-                }},loc)
-              )
-            ),
-            el("input",{value:sd.pm_opponent||"",onChange:e=>setDV(sel,"pm_opponent",e.target.value),
-              placeholder:"Adversário",list:"teams-list",
-              style:{width:"100%",padding:"6px 8px",borderRadius:6,border:"1px solid "+T.border,
-                fontSize:12,fontWeight:700,outline:"none",marginBottom:6}}),
-            el("input",{value:sd.pm_competition||"",onChange:e=>setDV(sel,"pm_competition",e.target.value),
-              placeholder:"Competição",list:"comp-list",
-              style:{width:"100%",padding:"5px 7px",borderRadius:6,border:"1px solid "+T.border,
-                fontSize:11,outline:"none",marginBottom:6}}),
-            el("input",{value:sd.pm_score||"",onChange:e=>setDV(sel,"pm_score",e.target.value),
-              placeholder:"Placar (ex: 2 x 1)",
-              style:{width:"100%",padding:"5px 7px",borderRadius:6,border:"1px solid "+T.border,
-                fontSize:11,outline:"none"}})
-          ),
-          sdTypes.pm_type && renderPlanoAnexo("pm")
-        ),
-
-        // ═══════════ NOITE ═══════════
-        // Só aparece se pn_type já está setado. Caso contrário mostra botão "+ Noite".
-        (sd.pn_type)
-          ? el("div",{style:{background:"#1E293B08",border:"1px solid #334155",borderRadius:8,
-              padding:"10px 12px",marginBottom:10}},
-              el("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
-                el("div",{style:{fontSize:10,fontWeight:800,color:"#334155",letterSpacing:".05em"}},"NOITE"),
-                el("button",{onClick:()=>saveMicroDay(sel, {...sd,
-                    pn_type:null, pn_activities:null, pn_methodology:null, pn_duration:null,
-                    pn_groups:null, pn_zone_id:null, pn_zone_label:null,
-                    pn_series:null, pn_reps:null,
-                    pn_opponent:null, pn_game_location:null, pn_competition:null, pn_score:null }),
-                  style:{padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,cursor:"pointer",
-                    border:"1px solid "+T.border,background:"#fff",color:T.muted}}, "− Remover")
-              ),
-              el("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,marginBottom:10}},
-                ...DAY_TYPES.map(t=>
-                  el("button",{key:t.id,onClick:()=>setDT(sel,"pn",t.id),style:{
-                    padding:"5px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",
-                    border:"1.5px solid "+(sdTypes.pn_type===t.id?t.color:T.border),
-                    background:sdTypes.pn_type===t.id?t.color:"#fff",
-                    color:sdTypes.pn_type===t.id?"#fff":T.muted
-                  }},t.label)
-                )
-              ),
-
-              // TREINO — noite
-              sdTypes.pn_type==="treino"&&el("div",null,
-                renderGroupsForPeriod("pn"),
-                el("div",{style:{fontSize:8,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4,letterSpacing:".05em"}},"Atividades"),
-                el("div",{style:{display:"flex",gap:3,marginBottom:8,flexWrap:"wrap"}},
-                  ...(()=>{
-                    const acts=sd.pn_activities?sd.pn_activities.split(","):[];
-                    return ["Campo","Academia","Corretivos","Fisio"].map(st=>{
-                      const on=acts.includes(st);
-                      return el("button",{key:st,onClick:()=>{
-                        const cur=sd.pn_activities?sd.pn_activities.split(",").filter(Boolean):[];
-                        const next=on?cur.filter(x=>x!==st):[...cur,st];
-                        setDV(sel,"pn_activities",next.join(","));
-                      },style:{padding:"2px 7px",borderRadius:5,fontSize:9,fontWeight:700,cursor:"pointer",
-                        border:"1px solid "+(on?"#334155":T.border),
-                        background:on?"#E2E8F0":"#fff",color:on?"#334155":T.muted}},st);
-                    });
-                  })()
-                ),
-                el("input",{value:sd.pn_methodology||"",onChange:e=>setDV(sel,"pn_methodology",e.target.value),
-                  onBlur:e=>handleMethBlur(e.target.value),
-                  list:"metodologias-memoria",
-                  placeholder:"Metodologia...",
-                  style:{width:"100%",padding:"5px 7px",borderRadius:5,border:"1px solid #334155",
-                    fontSize:11,outline:"none",marginBottom:6,background:"#fff"}}),
-                el("div",{style:{display:"flex",gap:6,alignItems:"center"}},
-                  el("span",{style:{fontSize:9,color:T.muted,fontWeight:700}},"Duração"),
-                  el("input",{type:"number",min:0,max:300,step:5,value:sd.pn_duration||"",
-                    onChange:e=>setDV(sel,"pn_duration",+e.target.value||null),placeholder:"min",
-                    style:{width:44,textAlign:"center",padding:"3px",borderRadius:5,
-                      border:"1px solid #334155",fontSize:11,fontWeight:800}}),
-                  el("span",{style:{fontSize:9,color:T.muted}},"min")
-                ),
-                renderVBTForPeriod("pn")
-              ),
-
-              // JOGO — noite
-              sdTypes.pn_type==="jogo"&&el("div",null,
-                el("div",{style:{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",marginBottom:4}},"Mando"),
-                el("div",{style:{display:"flex",gap:5,marginBottom:8}},
-                  ...["Casa","Fora"].map(loc=>
-                    el("button",{key:loc,onClick:()=>setDV(sel,"pn_game_location",loc),style:{
-                      flex:1,padding:"5px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",
-                      border:"1.5px solid "+(sd.pn_game_location===loc?"#C53030":T.border),
-                      background:sd.pn_game_location===loc?"#C53030":"#fff",
-                      color:sd.pn_game_location===loc?"#fff":T.muted
-                    }},loc)
-                  )
-                ),
-                el("input",{value:sd.pn_opponent||"",onChange:e=>setDV(sel,"pn_opponent",e.target.value),
-                  placeholder:"Adversário",list:"teams-list",
-                  style:{width:"100%",padding:"6px 8px",borderRadius:6,border:"1px solid "+T.border,
-                    fontSize:12,fontWeight:700,outline:"none",marginBottom:6}}),
-                el("input",{value:sd.pn_competition||"",onChange:e=>setDV(sel,"pn_competition",e.target.value),
-                  placeholder:"Competição",list:"comp-list",
-                  style:{width:"100%",padding:"5px 7px",borderRadius:6,border:"1px solid "+T.border,
-                    fontSize:11,outline:"none",marginBottom:6}}),
-                el("input",{value:sd.pn_score||"",onChange:e=>setDV(sel,"pn_score",e.target.value),
-                  placeholder:"Placar (ex: 2 x 1)",
-                  style:{width:"100%",padding:"5px 7px",borderRadius:6,border:"1px solid "+T.border,
-                    fontSize:11,outline:"none"}})
-              ),
-              sdTypes.pn_type && renderPlanoAnexo("pn")
-            )
-          : el("button",{onClick:()=>saveMicroDay(sel,{...sd, pn_type:"treino"}),
-              style:{width:"100%",padding:"8px",borderRadius:8,marginBottom:10,cursor:"pointer",
-                border:"1px dashed "+T.border,background:"transparent",color:T.muted,
-                fontSize:11,fontWeight:700}}, "+ Adicionar período noite"),
+        // ═══════════ MANHÃ · TARDE · NOITE (blocos por sub-período) ═══════════
+        renderPeriodPanel("am", {label:"MANHÃ", bg:"#FFFBEB", border:"#FDE68A", headerColor:"#D97706", borderInput:"#FDE68A"}),
+        renderPeriodPanel("pm", {label:"TARDE", bg:"#EFF6FF", border:"#BFDBFE", headerColor:"#2563EB", borderInput:"#BFDBFE"}),
+        renderPeriodPanel("pn", {label:"NOITE", bg:"#FAF5FF", border:"#D6BCFA", headerColor:"#805AD5", borderInput:"#D6BCFA"}),
 
         // Datalists compartilhadas
         el("datalist",{id:"teams-list"},
@@ -3084,25 +3016,28 @@ function DashboardView({athletes, profiles, loadMonth, microDays, snapshots}) {
     return result;
   }, [microDays, dateRange]);
 
-  // Contagens de tipos de treino (soma das 3 janelas por dia)
+  // Contagens de tipos de sub-blocos (soma dos sub-blocos por dia × 3 janelas)
   const contagem = useMemo(() => {
-    const c = { campo: 0, academia: 0, corretivo: 0, fisio: 0, correr: 0, jogo: 0, folga: 0, viagem: 0, treinoTotal: 0 };
+    const c = { campo: 0, academia: 0, corretivos: 0, fisio: 0, correr: 0, jogo: 0, folga: 0, viagem: 0, concentracao: 0, treinoTotal: 0 };
     diasNoRange.forEach(d => {
       ["am","pm","pn"].forEach(p => {
-        const tipo = d[p + "_type"];
-        if (!tipo) return;
-        if (tipo === "jogo") c.jogo++;
-        else if (tipo === "folga") c.folga++;
-        else if (tipo === "viagem") c.viagem++;
-        else if (tipo === "treino") {
-          c.treinoTotal++;
-          const acts = (d[p + "_activities"] || "").toLowerCase();
-          if (acts.includes("campo")) c.campo++;
-          if (acts.includes("academia")) c.academia++;
-          if (acts.includes("correti")) c.corretivo++;
-          if (acts.includes("fisio")) c.fisio++;
-          if (acts.includes("corr")) c.correr++;
-        }
+        const blocks = Array.isArray(d[p + "_blocks"]) ? d[p + "_blocks"] : [];
+        blocks.forEach(b => {
+          if (!b.tipo) return;
+          if (b.tipo === "jogo") c.jogo++;
+          else if (b.tipo === "folga") c.folga++;
+          else if (b.tipo === "viagem") c.viagem++;
+          else if (b.tipo === "concentracao") c.concentracao++;
+          else if (b.tipo === "treino") {
+            c.treinoTotal++;
+            const acts = (b.atividades || "").toLowerCase();
+            if (acts.includes("campo")) c.campo++;
+            if (acts.includes("academia")) c.academia++;
+            if (acts.includes("correti")) c.corretivos++;
+            if (acts.includes("fisio")) c.fisio++;
+            if (acts.includes("corr") && !acts.includes("correti")) c.correr++;
+          }
+        });
       });
     });
     return c;
@@ -3171,7 +3106,7 @@ function DashboardView({athletes, profiles, loadMonth, microDays, snapshots}) {
     children
   );
 
-  const maxTipoTreino = Math.max(contagem.campo, contagem.academia, contagem.corretivo, contagem.fisio, contagem.correr, 1);
+  const maxTipoTreino = Math.max(contagem.campo, contagem.academia, contagem.corretivos, contagem.fisio, contagem.correr, 1);
   const maxPosicao = Math.max(...porPosicao.map(p => p[1]), 1);
   const maxE1rm = Math.max(...Object.values(e1rmPorExercicio).map(v => v.max), 1);
 
@@ -3206,7 +3141,7 @@ function DashboardView({athletes, profiles, loadMonth, microDays, snapshots}) {
       el(KpiCard, {label:"Atletas ativos", value:atletasFiltrados.length, sub:comPerfilVBT+" com perfil VBT"}),
       el(KpiCard, {label:"Treinos", value:contagem.treinoTotal, sub:"campo + academia + demais", color:"#2563EB"}),
       el(KpiCard, {label:"Jogos", value:contagem.jogo, sub:"no período", color:"#C53030"}),
-      el(KpiCard, {label:"Folgas + Viagens", value:contagem.folga + contagem.viagem, sub:contagem.folga+" folga · "+contagem.viagem+" viagem", color:"#D97706"})
+      el(KpiCard, {label:"Folga · Viagem · Conc.", value:contagem.folga + contagem.viagem + contagem.concentracao, sub:contagem.folga+" folga · "+contagem.viagem+" viagem · "+contagem.concentracao+" conc.", color:"#D97706"})
     ),
 
     // Grid principal
@@ -3217,7 +3152,7 @@ function DashboardView({athletes, profiles, loadMonth, microDays, snapshots}) {
           : el("div", null,
               el(BarRow, {label:"Campo", value:contagem.campo, max:maxTipoTreino, color:"#38A169"}),
               el(BarRow, {label:"Academia", value:contagem.academia, max:maxTipoTreino, color:"#2563EB"}),
-              el(BarRow, {label:"Corretivo", value:contagem.corretivo, max:maxTipoTreino, color:"#805AD5"}),
+              el(BarRow, {label:"Corretivos", value:contagem.corretivos, max:maxTipoTreino, color:"#805AD5"}),
               el(BarRow, {label:"Fisio", value:contagem.fisio, max:maxTipoTreino, color:"#D69E2E"}),
               el(BarRow, {label:"Correr", value:contagem.correr, max:maxTipoTreino, color:"#DD6B20"})
             )
