@@ -1266,17 +1266,28 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
 
   const sd = sel ? (microDays[sel]||{}) : null;
 
+  // Paleta de cor por período (usada na célula do calendário)
+  const PERIOD_PALETTE = {
+    am: { bg: "#FFFBEB", label: "M", color: "#D97706" },
+    pm: { bg: "#EFF6FF", label: "T", color: "#2563EB" },
+    pn: { bg: "#FAF5FF", label: "N", color: "#805AD5" }
+  };
+
   // Renderiza uma metade da célula (manhã, tarde ou noite) — itera sub-blocos
   const renderHalf = (dd, period, cur) => {
     const blocks = Array.isArray(dd[period + "_blocks"]) ? dd[period + "_blocks"] : [];
-    const label = period === "am" ? "M" : period === "pm" ? "T" : "N";
+    const pal = PERIOD_PALETTE[period];
+    const label = pal.label;
 
-    // Vazio
+    // Vazio: fundo colorido claro do período pra deixar visível o espaço
     if (blocks.length === 0) {
-      return el("div",{style:{flex:1,minHeight:0,padding:"3px 6px",
-        display:"flex",alignItems:"center",gap:4}},
-        el("span",{style:{fontSize:8,fontWeight:800,color:"#CBD5E0",letterSpacing:".05em"}},label),
-        el("span",{style:{fontSize:8,color:"#CBD5E0"}},"—")
+      return el("div",{style:{
+        flex:1, minHeight:22, padding:"3px 6px",
+        background: cur ? pal.bg : "transparent",
+        display:"flex", alignItems:"center", gap:4, flexShrink:0
+      }},
+        el("span",{style:{fontSize:8.5,fontWeight:800,color:pal.color,letterSpacing:".05em",opacity:.55}},label),
+        el("span",{style:{fontSize:8,color:pal.color,opacity:.35}},"—")
       );
     }
 
@@ -1290,7 +1301,7 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
         if (!dt) {
           // Bloco sem tipo definido — mostra placeholder discreto
           return el("div",{key:b._id||idx,style:{
-            padding:"2px 6px", background:"#F1F5F9",
+            padding:"2px 6px", background: cur ? pal.bg : "transparent",
             borderLeft:"2px solid #CBD5E0",
             display:"flex", alignItems:"center", gap:4, overflow:"hidden",
             flexShrink:0
@@ -1303,7 +1314,7 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
         // Conteúdo linha por tipo
         const showLabelBadge = idx === 0;
         let mainLabel = "";
-        let sub1 = null, sub2 = null;
+        let sub1 = null, sub2 = null, sub3 = null, topRight = null;
 
         if (b.tipo === "treino") {
           const acts = (b.atividades || "").split(",").filter(Boolean);
@@ -1321,8 +1332,9 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
           const loc = b.game_location;
           const op = b.opponent;
           if (loc || op) sub1 = (loc ? loc.toUpperCase() + " · " : "") + (op || "—");
-          if (b.score) sub2 = { text: b.score, color: "#475569" };
-          else if (b.grupos) sub2 = { text: b.grupos, color: "#1E293B" };
+          if (b.score) sub2 = { text: b.score, color: "#475569", bold: true };
+          if (b.grupos) sub3 = b.grupos;
+          if (b.competition) topRight = b.competition;
         } else {
           // folga, viagem, concentracao
           mainLabel = dt.label.toUpperCase();
@@ -1340,12 +1352,17 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
           el("div",{style:{display:"flex",alignItems:"center",gap:4,minWidth:0}},
             showLabelBadge && el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".05em",flexShrink:0,opacity:.75}},label),
             el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".03em",
-              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, mainLabel)
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flexShrink:1}}, mainLabel),
+            topRight && el("span",{style:{marginLeft:"auto",fontSize:7.5,fontWeight:700,color:dt.color,
+              opacity:.7,letterSpacing:".02em",textTransform:"uppercase",
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flexShrink:0,maxWidth:"55%"}}, topRight)
           ),
           sub1 && el("div",{style:{fontSize:9.5,fontWeight:600,color:"#1E293B",
             overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sub1),
-          sub2 && el("div",{style:{fontSize:9,fontWeight:500,color:sub2.color,opacity:.9,
-            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sub2.text)
+          sub2 && el("div",{style:{fontSize:9.5,fontWeight:sub2.bold?700:500,color:sub2.color,opacity:.95,
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sub2.text),
+          sub3 && el("div",{style:{fontSize:9,fontWeight:500,color:"#475569",opacity:.85,
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sub3)
         );
       })
     );
@@ -1719,10 +1736,10 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
                 return h;
               }
               if (b.tipo === "jogo") {
-                let h = 42;
-                if (b.opponent || b.game_location) h += 14;
-                if (b.score) h += 14;
-                if (b.grupos) h += 14;
+                let h = 30; // rótulo + competição
+                if (b.opponent || b.game_location) h += 14; // sub1
+                if (b.score) h += 14; // sub2
+                if (b.grupos) h += 14; // sub3
                 return h;
               }
               // folga / viagem / concentracao
@@ -1743,17 +1760,17 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
             return el("div",{key:date,onClick:()=>!exporting && setSel(isS?null:date),style:cellStyle},
               // Cabeçalho do dia
               el("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",
-                padding:"3px 7px 2px",flexShrink:0,borderBottom:hasAny?"1px solid "+T.border+"33":"none"}},
+                padding:"3px 7px 2px",flexShrink:0,borderBottom:"1px solid "+T.border+"55",background:"#fff"}},
                 el("span",{style:{fontSize:12,fontWeight:isT?900:700,color:isT?T.accent:cur?T.text:"#CBD5E0"}},day)
               ),
               // Manhã
               renderHalf(dd, "am", cur),
-              // Divisor (só se manhã E tarde têm conteúdo)
-              (hasAm && hasPm) && el("div",{style:{height:1,background:T.border+"55",flexShrink:0}}),
+              // Divisor entre manhã e tarde (sempre visível pra separar períodos)
+              el("div",{style:{height:2,background:"#E2E8F0",flexShrink:0}}),
               // Tarde
               renderHalf(dd, "pm", cur),
-              // Noite (só se hasNoite)
-              hasNoite && el("div",{style:{height:1,background:T.border+"55",flexShrink:0}}),
+              // Divisor entre tarde e noite (só se noite tem conteúdo — noite vazia não aparece)
+              hasNoite && el("div",{style:{height:2,background:"#E2E8F0",flexShrink:0}}),
               hasNoite && renderHalf(dd, "pn", cur)
             );
           })
