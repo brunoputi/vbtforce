@@ -1282,36 +1282,51 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
     // Vazio: fundo colorido claro do período pra deixar visível o espaço
     if (blocks.length === 0) {
       return el("div",{style:{
-        flex:1, minHeight:22, padding:"3px 6px",
+        minHeight:20, padding:"4px 8px",
         background: cur ? pal.bg : "transparent",
-        display:"flex", alignItems:"center", gap:4, flexShrink:0
+        display:"flex", alignItems:"center", flexShrink:0
       }},
-        el("span",{style:{fontSize:8.5,fontWeight:800,color:pal.color,letterSpacing:".05em",opacity:.55}},label),
-        el("span",{style:{fontSize:8,color:pal.color,opacity:.35}},"—")
+        el("span",{style:{fontSize:9,color:pal.color,opacity:.4,letterSpacing:".05em"}},"—")
       );
     }
 
-    // Container flex column com uma linha por sub-bloco
+    // Container com sub-blocos empilhados — altura natural, sem flex:1
     return el("div",{style:{
-      flex:1, minHeight:0,
-      display:"flex", flexDirection:"column", overflow:"visible"
+      display:"flex", flexDirection:"column", overflow:"hidden", gap:2, padding:"2px",
+      flexShrink:0
     }},
       ...blocks.map((b, idx) => {
         const dt = b.tipo ? DAY_TYPES.find(t=>t.id===b.tipo) : null;
         if (!dt) {
-          // Bloco sem tipo definido — mostra placeholder discreto
           return el("div",{key:b._id||idx,style:{
-            padding:"2px 6px", background: cur ? pal.bg : "transparent",
-            borderLeft:"2px solid #CBD5E0",
-            display:"flex", alignItems:"center", gap:4, overflow:"hidden",
-            flexShrink:0
+            padding:"3px 7px", background: cur ? pal.bg : "transparent",
+            borderLeft:"3px solid #CBD5E0", borderRadius:4,
+            display:"flex", alignItems:"center", gap:4, overflow:"hidden", flexShrink:0
           }},
             idx === 0 && el("span",{style:{fontSize:8,fontWeight:800,color:"#94A3B8",letterSpacing:".05em",flexShrink:0}},label),
             el("span",{style:{fontSize:8.5,color:"#64748B",fontStyle:"italic"}}, "(tipo indefinido)")
           );
         }
 
-        // Conteúdo linha por tipo
+        // Folga: rótulo + grupos (se preenchidos)
+        if (b.tipo === "folga") {
+          return el("div",{key:b._id||idx,style:{
+            padding: "4px 8px",
+            background: cur ? "#F1F5F9" : "transparent",
+            borderLeft: "4px solid #94A3B8",
+            borderRadius: 4,
+            display:"flex", flexDirection:"column", gap:1,
+            flexShrink: 0
+          }},
+            el("div",{style:{display:"flex",alignItems:"center",gap:5}},
+              el("span",{style:{fontSize:10,fontWeight:800,color:"#64748B",letterSpacing:".02em"}},"FOLGA")
+            ),
+            b.grupos && el("div",{style:{fontSize:10,fontWeight:600,color:"#475569",
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, b.grupos)
+          );
+        }
+
+        // Conteúdo por tipo (treino, jogo, viagem, concentracao)
         const showLabelBadge = idx === 0;
         let mainLabel = "";
         let sub1 = null, sub2 = null, sub3 = null, topRight = null;
@@ -1336,30 +1351,28 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
           if (b.grupos) sub3 = b.grupos;
           if (b.competition) topRight = b.competition;
         } else {
-          // folga, viagem, concentracao
           mainLabel = dt.label.toUpperCase();
           if (b.grupos) sub1 = b.grupos;
         }
 
         return el("div",{key:b._id||idx,style:{
-          padding: "3px 6px",
+          padding: "4px 8px",
           background: cur ? dt.bg : "transparent",
-          borderLeft: "3px solid " + dt.color,
-          borderBottom: idx < blocks.length - 1 ? "1px solid " + dt.color + "22" : "none",
+          borderLeft: "4px solid " + dt.color,
+          borderRadius: 4,
           display:"flex", flexDirection:"column", gap:1, overflow:"hidden", minWidth:0,
           flexShrink:0
         }},
-          el("div",{style:{display:"flex",alignItems:"center",gap:4,minWidth:0}},
-            showLabelBadge && el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".05em",flexShrink:0,opacity:.75}},label),
-            el("span",{style:{fontSize:8.5,fontWeight:700,color:dt.color,letterSpacing:".03em",
+          el("div",{style:{display:"flex",alignItems:"center",gap:5,minWidth:0}},
+            el("span",{style:{fontSize:10,fontWeight:800,color:dt.color,letterSpacing:".02em",
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flexShrink:1}}, mainLabel),
             topRight && el("span",{style:{marginLeft:"auto",fontSize:7.5,fontWeight:700,color:dt.color,
-              opacity:.7,letterSpacing:".02em",textTransform:"uppercase",
+              opacity:.65,letterSpacing:".03em",textTransform:"uppercase",
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flexShrink:0,maxWidth:"55%"}}, topRight)
           ),
-          sub1 && el("div",{style:{fontSize:9.5,fontWeight:600,color:"#1E293B",
+          sub1 && el("div",{style:{fontSize:10,fontWeight:600,color:"#1E293B",
             overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sub1),
-          sub2 && el("div",{style:{fontSize:9.5,fontWeight:sub2.bold?700:500,color:sub2.color,opacity:.95,
+          sub2 && el("div",{style:{fontSize:9.5,fontWeight:sub2.bold?800:500,color:sub2.color,opacity:.95,
             overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sub2.text),
           sub3 && el("div",{style:{fontSize:9,fontWeight:500,color:"#475569",opacity:.85,
             overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}, sub3)
@@ -1704,12 +1717,14 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
       el("div",{"data-micro-grid":true,style:{flex:1,padding:"12px 16px"}},
         // Título de exportação (hidden na tela, visível apenas no PNG)
         el("div",{"data-micro-export-title":true,style:{
-          display:"none",padding:"6px 4px 14px",textAlign:"center"
+          display:"none",padding:"8px 4px 16px",textAlign:"center"
         }},
-          el("div",{style:{fontSize:24,fontWeight:900,color:T.text,letterSpacing:"-.01em"}},
+          el("div",{style:{fontSize:11,fontWeight:800,color:T.accent,letterSpacing:".15em",marginBottom:2,textTransform:"uppercase"}},
+            selectedCategoria || "Profissional"),
+          el("div",{style:{fontSize:26,fontWeight:900,color:T.text,letterSpacing:"-.02em"}},
             monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)),
-          el("div",{style:{fontSize:11,fontWeight:600,color:T.muted,marginTop:4,letterSpacing:".05em"}},
-            stats.campo + " CAMPO  ·  " + stats.aca + " ACADEMIA  ·  " + stats.jogos + " JOGOS")
+          el("div",{style:{fontSize:10,fontWeight:600,color:T.muted,marginTop:6,letterSpacing:".05em"}},
+            stats.campo + " CAMPO  ·  " + stats.aca + " ACADEMIA  ·  " + stats.corr + " CORRETIVOS  ·  " + stats.jogos + " JOGOS")
         ),
         el("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:4}},
           ...WEEKDAYS.map(d=>el("div",{key:d,style:{textAlign:"center",fontSize:11,fontWeight:700,
@@ -1723,32 +1738,21 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
             const pmBlocks = Array.isArray(dd.pm_blocks) ? dd.pm_blocks : [];
             const pnBlocks = Array.isArray(dd.pn_blocks) ? dd.pn_blocks : [];
             const hasNoite = pnBlocks.length > 0;
-            const hasAm = amBlocks.length > 0;
-            const hasPm = pmBlocks.length > 0;
-            const hasAny = hasAm || hasPm || hasNoite;
-            // Altura por bloco depende do tipo (treino precisa de mais espaço)
-            const blockH = (b) => {
-              if (!b || !b.tipo) return 22;
-              if (b.tipo === "treino") {
-                let h = 42; // rótulo + 1 linha
-                if (b.grupos) h += 14;
-                if (b.zone_id || b.metodologia) h += 14;
-                return h;
-              }
-              if (b.tipo === "jogo") {
-                let h = 30; // rótulo + competição
-                if (b.opponent || b.game_location) h += 14; // sub1
-                if (b.score) h += 14; // sub2
-                if (b.grupos) h += 14; // sub3
-                return h;
-              }
-              // folga / viagem / concentracao
-              return b.grupos ? 38 : 22;
-            };
-            const totalH = [...amBlocks, ...pmBlocks, ...pnBlocks].reduce((s,b) => s + blockH(b), 0);
-            const minH = Math.max(128, 32 + totalH);
+            const hasAny = amBlocks.length > 0 || pmBlocks.length > 0 || hasNoite;
+            // Detecta dia inteiramente de folga (não vai desenhar faixas MANHÃ/TARDE/NOITE)
+            const allBlocks = [...amBlocks, ...pmBlocks, ...pnBlocks];
+            const isAllFolga = hasAny && allBlocks.every(b => b.tipo === "folga");
+            // Consolida grupos únicos das folgas do dia
+            let consolidatedGroups = "";
+            if (isAllFolga) {
+              const set = new Set();
+              allBlocks.forEach(b => {
+                (b.grupos || "").split(",").filter(Boolean).forEach(g => set.add(g));
+              });
+              consolidatedGroups = [...set].join(",");
+            }
             const cellStyle = {
-              minHeight: minH, borderRadius:8, cursor:"pointer",
+              minHeight: 128, borderRadius:8, cursor:"pointer",
               border: isS && !exporting ? "2px solid "+T.accent
                     : isT && !exporting ? "2px solid #CBD5E0"
                     : "1px solid "+T.border+"66",
@@ -1760,20 +1764,80 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
             return el("div",{key:date,onClick:()=>!exporting && setSel(isS?null:date),style:cellStyle},
               // Cabeçalho do dia
               el("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",
-                padding:"3px 7px 2px",flexShrink:0,borderBottom:"1px solid "+T.border+"55",background:"#fff"}},
-                el("span",{style:{fontSize:12,fontWeight:isT?900:700,color:isT?T.accent:cur?T.text:"#CBD5E0"}},day)
+                padding:"4px 8px 3px",flexShrink:0,borderBottom:"1px solid "+T.border+"55",background:"#fff"}},
+                el("span",{style:{
+                  fontSize:13, fontWeight:isT?900:800,
+                  color: isT ? "#fff" : cur ? T.text : "#CBD5E0",
+                  background: isT ? T.accent : "transparent",
+                  borderRadius: 10, padding: isT ? "0 7px" : 0,
+                  minWidth: isT ? 20 : "auto",
+                  textAlign:"center", display:"inline-block", lineHeight:"18px"
+                }},day)
               ),
-              // Manhã
-              renderHalf(dd, "am", cur),
-              // Divisor entre manhã e tarde (sempre visível pra separar períodos)
-              el("div",{style:{height:2,background:"#E2E8F0",flexShrink:0}}),
-              // Tarde
-              renderHalf(dd, "pm", cur),
-              // Divisor entre tarde e noite (só se noite tem conteúdo — noite vazia não aparece)
-              hasNoite && el("div",{style:{height:2,background:"#E2E8F0",flexShrink:0}}),
-              hasNoite && renderHalf(dd, "pn", cur)
+              // Dia inteiro de folga: bloco único condensado, sem faixas de período
+              isAllFolga
+                ? el("div",{style:{
+                    padding:"12px 10px",
+                    display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+                    gap:6, flex:1, background: cur ? "#F1F5F9" : "transparent"
+                  }},
+                    el("span",{style:{fontSize:14,fontWeight:800,color:"#64748B",letterSpacing:".08em"}},"FOLGA"),
+                    consolidatedGroups && el("span",{style:{fontSize:10,fontWeight:600,color:"#94A3B8",
+                      textAlign:"center",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}},
+                      consolidatedGroups)
+                  )
+                : [
+                    // Rótulo MANHÃ (amarelo)
+                    el("div",{key:"lbl-am",style:{
+                      display:"flex", alignItems:"center", gap:6,
+                      padding:"0 8px", height:14, flexShrink:0,
+                      background:"#FEF3C7", borderBottom:"1px solid #FCD34D"
+                    }},
+                      el("span",{style:{fontSize:8,fontWeight:800,color:"#B45309",letterSpacing:".1em"}},"MANHÃ"),
+                      el("div",{style:{flex:1,height:1,background:"#FCD34D"}})
+                    ),
+                    // Manhã
+                    el(React.Fragment, {key:"am"}, renderHalf(dd, "am", cur)),
+                    // Rótulo TARDE (azul)
+                    el("div",{key:"lbl-pm",style:{
+                      display:"flex", alignItems:"center", gap:6,
+                      padding:"0 8px", height:14, flexShrink:0,
+                      background:"#DBEAFE", borderTop:"1px solid #93C5FD", borderBottom:"1px solid #93C5FD"
+                    }},
+                      el("span",{style:{fontSize:8,fontWeight:800,color:"#1D4ED8",letterSpacing:".1em"}},"TARDE"),
+                      el("div",{style:{flex:1,height:1,background:"#93C5FD"}})
+                    ),
+                    // Tarde
+                    el(React.Fragment, {key:"pm"}, renderHalf(dd, "pm", cur)),
+                    // Rótulo NOITE (roxo) — só quando noite tem conteúdo
+                    hasNoite && el("div",{key:"lbl-pn",style:{
+                      display:"flex", alignItems:"center", gap:6,
+                      padding:"0 8px", height:14, flexShrink:0,
+                      background:"#EDE9FE", borderTop:"1px solid #C4B5FD", borderBottom:"1px solid #C4B5FD"
+                    }},
+                      el("span",{style:{fontSize:8,fontWeight:800,color:"#6D28D9",letterSpacing:".1em"}},"NOITE"),
+                      el("div",{style:{flex:1,height:1,background:"#C4B5FD"}})
+                    ),
+                    hasNoite && el(React.Fragment, {key:"pn"}, renderHalf(dd, "pn", cur))
+                  ]
             );
           })
+        ),
+        // Legenda de cores (só visível no export)
+        el("div",{"data-micro-export-legend":true,style:{
+          display:"none",padding:"14px 4px 6px",
+          justifyContent:"center",alignItems:"center",gap:14,flexWrap:"wrap"
+        }},
+          ...[
+            {c:"#2563EB",l:"Treino"},
+            {c:"#C53030",l:"Jogo"},
+            {c:"#D97706",l:"Viagem"},
+            {c:"#805AD5",l:"Concentração"},
+            {c:"#94A3B8",l:"Folga"}
+          ].map(item => el("div",{key:item.l,style:{display:"flex",alignItems:"center",gap:5}},
+            el("div",{style:{width:12,height:12,background:item.c,borderRadius:3}}),
+            el("span",{style:{fontSize:10,fontWeight:600,color:T.sub,letterSpacing:".02em"}}, item.l)
+          ))
         )
       ),
       // Detail panel (escondido durante exportação para grid ocupar largura total)
