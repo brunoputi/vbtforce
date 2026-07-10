@@ -172,12 +172,21 @@ const apiV2 = {
 // ═══════════════════════════════════════════════════════════════════════════
 // Regra de semana: começa na segunda. Semana pertence ao mês em que cai a segunda.
 
+// Converte Date object para YYYY-MM-DD usando hora LOCAL (não UTC)
+// Evita bug do "dia trocado à noite" que toISOString().slice(0,10) causa
+function localDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + day;
+}
+
 function mv2_getMonday(dateStr) {
   const d = new Date(dateStr + 'T12:00:00');
   const dow = d.getDay(); // 0=dom
   const diff = dow === 0 ? -6 : 1 - dow;
   d.setDate(d.getDate() + diff);
-  return d.toISOString().slice(0,10);
+  return localDateStr(d);
 }
 function mv2_getWeekMonthKey(dateStr) {
   return mv2_getMonday(dateStr).slice(0,7); // "YYYY-MM"
@@ -781,7 +790,7 @@ function SessionView({athletes,profiles,bars}) {
   const [velIdx,setVI]= useState(11);
   const [ser,setSer] = useState(3);
   const [rep,setRep] = useState(5);
-  const [date,setDate]= useState(()=>new Date().toISOString().slice(0,10));
+  const [date,setDate]= useState(()=>localDateStr(new Date()));
   const [showRpt,setRpt]=useState(false);
   const [showSel,setShowSel]=useState(false);
   const [catFilter,setCat]=useState("Todas");
@@ -1099,15 +1108,15 @@ function getMonthDates(year, month) {
   const dates = [];
   for (let i = startDay - 1; i >= 0; i--) {
     const d = new Date(year, month, -i);
-    dates.push({ date: d.toISOString().slice(0,10), day: d.getDate(), cur: false });
+    dates.push({ date: localDateStr(d), day: d.getDate(), cur: false });
   }
   for (let i = 1; i <= last.getDate(); i++) {
     const d = new Date(year, month, i);
-    dates.push({ date: d.toISOString().slice(0,10), day: i, cur: true });
+    dates.push({ date: localDateStr(d), day: i, cur: true });
   }
   while (dates.length < totalCells) {
     const d = new Date(year, month + 1, dates.length - last.getDate() - startDay + 1);
-    dates.push({ date: d.toISOString().slice(0,10), day: d.getDate(), cur: false });
+    dates.push({ date: localDateStr(d), day: d.getDate(), cur: false });
   }
   return dates;
 }
@@ -1166,7 +1175,7 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
   const [exporting, setExporting] = useState(false);
   const [metodologias, setMetodologias] = useState([]);
   const [showAnexos, setShowAnexos] = useState(false);
-  const todayStr = today.toISOString().slice(0,10);
+  const todayStr = localDateStr(today);
 
   // Carrega memória de metodologias uma vez ao montar
   React.useEffect(() => {
@@ -2008,7 +2017,7 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,onClose}) {
 
   const RED="#C8102E", BLACK="#111111", WHITE="#FFFFFF", LGRAY="#F4F4F4", MGRAY="#E0E0E0", DGRAY="#444444";
 
-  const dateObj=new Date((date||new Date().toISOString().slice(0,10))+"T12:00:00");
+  const dateObj=new Date((date||localDateStr(new Date()))+"T12:00:00");
   const dateStr=dateObj.toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric"});
 
   const barW=ex=>ex==="Trap Bar Deadlift"?(bars.trapbar_kg||bars.trapbar||30):(bars.olympic_kg||bars.olympic||20);
@@ -3087,7 +3096,7 @@ function DashboardView({athletes, profiles, loadMonth, microDays, snapshots}) {
 
   // Filtra os dias do microciclo pelo range de datas
   const diasNoRange = useMemo(() => {
-    const fmt = d => d.toISOString().slice(0,10);
+    const fmt = d => localDateStr(d);
     const startStr = fmt(dateRange.start);
     const endStr = fmt(dateRange.end);
     const result = [];
@@ -3572,7 +3581,7 @@ function App() {
     const rangeStart = new Date(year, month0, 1 - startDay);
     const rangeEnd = new Date(rangeStart);
     rangeEnd.setDate(rangeEnd.getDate() + 41);
-    const fmt = d => d.toISOString().slice(0,10);
+    const fmt = d => localDateStr(d);
     try {
       const dias = await mv2_loadDiasRange(fmt(rangeStart), fmt(rangeEnd), cat);
       // Se categoria mudou, resetar tudo antes de mesclar (evita ver dados de outra categoria)
