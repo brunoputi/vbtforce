@@ -2200,15 +2200,18 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,snapshots,savePresencaS
   // Todos os atletas na sessão
   const allAthletes = useMemo(() => rows.map(r => r.a), [rows]);
 
-  // Popula presença ao montar: primeiro tenta carregar do banco;
-  // se não tem, marca automaticamente quem tem snapshot VBT no dia
+  // Popula presença ao abrir o modal ou trocar data: carrega do banco;
+  // se não tem, marca automaticamente quem tem snapshot VBT no dia.
+  // Deps: SÓ date. Snapshots e allAthletes são lidos dentro; se não incluíssemos
+  // apenas date, o useEffect rodaria a cada render e sobrescreveria os toggles.
   React.useEffect(() => {
+    let cancelled = false;
     (async () => {
+      const currentAthletes = rows.map(r => r.a);
       if (!loadPresencaSessao) {
-        // Fallback sem persistência: todos presentes
         const m = {};
-        allAthletes.forEach(a => { m[a.id] = 'presente'; });
-        setPresencaMap(m);
+        currentAthletes.forEach(a => { m[a.id] = 'presente'; });
+        if (!cancelled) setPresencaMap(m);
         return;
       }
       const saved = await loadPresencaSessao(date);
@@ -2218,13 +2221,15 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,snapshots,savePresencaS
         (snapshots || []).filter(s => s.session_date === date).map(s => s.athlete_id)
       );
       const m = {};
-      allAthletes.forEach(a => {
+      currentAthletes.forEach(a => {
         if (savedMap[a.id]) m[a.id] = savedMap[a.id];
         else m[a.id] = athleteIdsComSnapshot.has(a.id) ? 'presente' : 'ausente';
       });
-      setPresencaMap(m);
+      if (!cancelled) setPresencaMap(m);
     })();
-  }, [date, snapshots, loadPresencaSessao, allAthletes]);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
 
   const togglePresenca = (id) => {
     setPresencaMap(m => ({...m, [id]: m[id] === 'presente' ? 'ausente' : 'presente'}));
