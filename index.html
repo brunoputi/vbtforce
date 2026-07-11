@@ -3511,15 +3511,26 @@ function PresencaView({ athletes, importPresenca, loadPresencaDia }) {
               "\nSem atleta correspondente: " + stats.semAtleta);
       } else {
         const result = await importPresenca(records, stats.datasAfetadas);
-        let msg = "Importação concluída:\n\n" +
-                  "• " + result.inseridos + " registros salvos\n" +
-                  "• " + stats.datasAfetadas.length + " dia(s) atualizado(s)";
+        let msg;
+        if (result.inseridos === 0) {
+          msg = "⚠️ NENHUM registro foi salvo no banco.\n\n" +
+                "Foram enviados " + records.length + " registros mas todos falharam.\n" +
+                "Abra o console (F12) e me manda o erro que aparece lá.\n\n";
+          if (result.errosDetalhe.length) {
+            msg += "Primeiros erros:\n" + result.errosDetalhe.slice(0,3).join('\n');
+          }
+        } else {
+          msg = "Importação concluída:\n\n" +
+                "• " + result.inseridos + " registros salvos\n" +
+                "• " + stats.datasAfetadas.length + " dia(s) atualizado(s)";
+          if (result.falhas > 0) msg += "\n\n⚠️ " + result.falhas + " registros FALHARAM (ver console)";
+        }
         if (stats.semAtleta > 0) {
-          msg += "\n• " + stats.semAtleta + " linhas com atleta não cadastrado:\n  " +
+          msg += "\n\n" + stats.semAtleta + " linhas com atleta não cadastrado:\n  " +
                  stats.naoEncontrados.slice(0, 5).join(", ") +
                  (stats.naoEncontrados.length > 5 ? " (+ " + (stats.naoEncontrados.length - 5) + " outros)" : "");
         }
-        if (stats.ignoradas > 0) msg += "\n• " + stats.ignoradas + " linha(s) inválida(s) ignoradas";
+        if (stats.ignoradas > 0) msg += "\n" + stats.ignoradas + " linha(s) inválida(s) ignoradas";
         alert(msg);
         await carregarDia(dataConsulta);
       }
@@ -3661,14 +3672,30 @@ function App() {
   // === Presença ===
   const importPresenca = async (records, datasAfetadas) => {
     // Sobrescreve por dia: apaga registros existentes com source='planilha_cap' nos dias afetados
-    // e insere os novos. Registros de outras fontes (VBT auto, manual) ficam intactos.
     for (const data of datasAfetadas) {
       await api.delete('presenca_sessao', 'data=eq.' + data + '&source=eq.planilha_cap');
     }
-    // Insere em batch (adiciona club_id em cada registro)
-    const payload = records.map(r => ({ ...r, club_id: CLUB_ID }));
-    await api.post('presenca_sessao', payload);
-    return { inseridos: records.length };
+    // Insere em batches de 200 pra evitar payloads gigantes.
+    // Captura o retorno real: se der erro, api.post retorna null.
+    const BATCH = 200;
+    let inseridos = 0, falhas = 0;
+    const errosDetalhe = [];
+    for (let i = 0; i < records.length; i += BATCH) {
+      const chunk = records.slice(i, i + BATCH).map(r => ({ ...r, club_id: CLUB_ID }));
+      try {
+        const res = await api.post('presenca_sessao', chunk);
+        if (Array.isArray(res)) inseridos += res.length;
+        else {
+          // api.post logou o erro no console e retornou null
+          falhas += chunk.length;
+          errosDetalhe.push('Batch ' + i + ': falha (ver console)');
+        }
+      } catch(e) {
+        falhas += chunk.length;
+        errosDetalhe.push('Batch ' + i + ': ' + e.message);
+      }
+    }
+    return { inseridos, falhas, errosDetalhe };
   };
 
   const loadPresencaDia = React.useCallback(async (dataStr) => {
