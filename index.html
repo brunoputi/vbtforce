@@ -661,22 +661,39 @@ function parsePresencaCAP(text, athletesList) {
   const regNames = athletesList.map(a => a.name);
   const { data } = window.Papa.parse(text, { header: true, skipEmptyLines: true });
 
+  // Detecta formato de data: BR (DD/MM/YYYY) ou US (MM/DD/YYYY)
+  // Voto por evidência: se algum campo > 12, esse é o dia.
+  let brVotes = 0, usVotes = 0;
+  (data || []).forEach(row => {
+    const s = String(row['Data'] || row['DATA'] || row['data'] || '').trim();
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (!m) return;
+    const [, a, b] = m;
+    if (+a > 12 && +b <= 12) brVotes++;
+    else if (+b > 12 && +a <= 12) usVotes++;
+  });
+  const format = usVotes > brVotes ? 'us' : 'br';
+
   const records = [];
-  let ignoradas = 0, semAtleta = 0, comAtleta = 0;
+  let ignoradas = 0, semAtleta = 0, comAtleta = 0, dataInvalida = 0;
   const naoEncontrados = new Set();
   const datasAfetadas = new Set();
 
-  const parseDataBR = (s) => {
+  const parseDataFlex = (s) => {
     if (!s) return null;
     const m = String(s).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
     if (!m) return null;
-    let [, d, mo, y] = m;
+    let [, a, b, y] = m;
     if (y.length === 2) y = (Number(y) >= 70 ? '19' : '20') + y;
-    return y + '-' + mo.padStart(2,'0') + '-' + d.padStart(2,'0');
+    // Formato detectado dita a ordem
+    const day = format === 'us' ? b : a;
+    const month = format === 'us' ? a : b;
+    const dn = +day, mn = +month;
+    if (dn < 1 || dn > 31 || mn < 1 || mn > 12) return null;
+    return y + '-' + String(mn).padStart(2,'0') + '-' + String(dn).padStart(2,'0');
   };
 
   (data || []).forEach(row => {
-    // Aceita variações de cabeçalho com/sem acento
     const nome = String(row['Nome'] || row['Atleta'] || '').trim();
     const dataStr = row['Data'] || row['DATA'] || row['data'];
     const grupo = String(row['Grupo'] || row['GRUPO'] || '').trim();
@@ -686,20 +703,17 @@ function parsePresencaCAP(text, athletesList) {
 
     if (!nome || !dataStr) { ignoradas++; return; }
 
-    const dataISO = parseDataBR(dataStr);
-    if (!dataISO) { ignoradas++; return; }
+    const dataISO = parseDataFlex(dataStr);
+    if (!dataISO) { dataInvalida++; return; }
 
-    // Fuzzy-match com nomes cadastrados
     const m = matchName(nome, regNames);
     if (!m) { semAtleta++; naoEncontrados.add(nome); return; }
     const athlete = athletesList.find(a => a.name === m.name);
     if (!athlete) { semAtleta++; naoEncontrados.add(nome); return; }
 
-    // Ausente se tipoDia é "Folga" (aceita variações)
     const tipoLower = tipoDia.toLowerCase();
     const isAusente = tipoLower.includes('folga') || tipoLower.includes('ausen');
 
-    // Motivo: primeiro Lesão, senão Quadro (LCA/Condicionamento em DM/RTP), senão null
     let motivo = null;
     if (isAusente) motivo = 'folga';
     else if (lesao) motivo = lesao;
@@ -708,6 +722,7 @@ function parsePresencaCAP(text, athletesList) {
     records.push({
       atleta_id: athlete.id,
       data: dataISO,
+      periodo: null,
       grupo: grupo || null,
       tipo_dia: tipoDia || null,
       status: isAusente ? 'ausente' : 'presente',
@@ -724,9 +739,10 @@ function parsePresencaCAP(text, athletesList) {
     records,
     stats: {
       total: (data || []).length,
-      comAtleta, semAtleta, ignoradas,
+      comAtleta, semAtleta, ignoradas, dataInvalida,
       naoEncontrados: [...naoEncontrados],
-      datasAfetadas: [...datasAfetadas].sort()
+      datasAfetadas: [...datasAfetadas].sort(),
+      formatoDetectado: format
     }
   };
 }
@@ -3511,10 +3527,12 @@ function PresencaView({ athletes, importPresenca, loadPresencaDia }) {
               "\nSem atleta correspondente: " + stats.semAtleta);
       } else {
         const result = await importPresenca(records, stats.datasAfetadas);
+        const fmtLabel = stats.formatoDetectado === 'us' ? 'MM/DD/AAAA (americano)' : 'DD/MM/AAAA (brasileiro)';
         let msg;
         if (result.inseridos === 0) {
           msg = "⚠️ NENHUM registro foi salvo no banco.\n\n" +
                 "Foram enviados " + records.length + " registros mas todos falharam.\n" +
+                "Formato de data detectado: " + fmtLabel + "\n" +
                 "Abra o console (F12) e me manda o erro que aparece lá.\n\n";
           if (result.errosDetalhe.length) {
             msg += "Primeiros erros:\n" + result.errosDetalhe.slice(0,3).join('\n');
@@ -3522,8 +3540,12 @@ function PresencaView({ athletes, importPresenca, loadPresencaDia }) {
         } else {
           msg = "Importação concluída:\n\n" +
                 "• " + result.inseridos + " registros salvos\n" +
-                "• " + stats.datasAfetadas.length + " dia(s) atualizado(s)";
+                "• " + stats.datasAfetadas.length + " dia(s) atualizado(s)\n" +
+                "• Formato de data: " + fmtLabel;
           if (result.falhas > 0) msg += "\n\n⚠️ " + result.falhas + " registros FALHARAM (ver console)";
+        }
+        if (stats.dataInvalida > 0) {
+          msg += "\n\n" + stats.dataInvalida + " linha(s) com data inválida (fora do formato)";
         }
         if (stats.semAtleta > 0) {
           msg += "\n\n" + stats.semAtleta + " linhas com atleta não cadastrado:\n  " +
@@ -3671,22 +3693,18 @@ function App() {
 
   // === Presença ===
   const importPresenca = async (records, datasAfetadas) => {
-    // Sobrescreve por dia: apaga registros existentes com source='planilha_cap' nos dias afetados
-    for (const data of datasAfetadas) {
-      await api.delete('presenca_sessao', 'data=eq.' + data + '&source=eq.planilha_cap');
-    }
-    // Insere em batches de 200 pra evitar payloads gigantes.
-    // Captura o retorno real: se der erro, api.post retorna null.
+    // UPSERT em batches — a tabela tem UNIQUE(atleta_id, data, periodo, contexto).
+    // Se já existe registro pra (atleta, data, período, contexto), atualiza. Senão, cria.
+    // Estratégia não-destrutiva: mesmo se der erro em alguns, os outros são salvos.
     const BATCH = 200;
     let inseridos = 0, falhas = 0;
     const errosDetalhe = [];
     for (let i = 0; i < records.length; i += BATCH) {
       const chunk = records.slice(i, i + BATCH).map(r => ({ ...r, club_id: CLUB_ID }));
       try {
-        const res = await api.post('presenca_sessao', chunk);
+        const res = await api.upsert('presenca_sessao', chunk, 'atleta_id,data,periodo,contexto');
         if (Array.isArray(res)) inseridos += res.length;
         else {
-          // api.post logou o erro no console e retornou null
           falhas += chunk.length;
           errosDetalhe.push('Batch ' + i + ': falha (ver console)');
         }
