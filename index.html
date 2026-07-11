@@ -605,12 +605,16 @@ function nameScore(a, b) {
   const ta=tokens(a), tb=tokens(b);
   const setA=new Set(ta), setB=new Set(tb);
   if (ta.every(t=>setB.has(t)) && tb.every(t=>setA.has(t))) return 95;
+  // Caso especial: 1 dos nomes tem só 1 token (típico de apelido/nome curto)
+  // Aceita match se esse único token aparece em qualquer posição do outro nome
+  if (ta.length === 1 && tb.length > 1 && setB.has(ta[0])) return 85;
+  if (tb.length === 1 && ta.length > 1 && setA.has(tb[0])) return 85;
   // Sobrenome (último token) deve obrigatoriamente bater para score alto
   const lastA=ta.at(-1), lastB=tb.at(-1);
-  if (!lastA||!lastB||lastA!==lastB) return 0; // sobrenome diferente = não é a mesma pessoa
+  if (!lastA||!lastB||lastA!==lastB) return 0;
   const overlap=[...setA].filter(t=>setB.has(t)).length;
   const union=new Set([...setA,...setB]).size;
-  const s=(overlap/union)*70 + 30; // +30 base por sobrenome bater
+  const s=(overlap/union)*70 + 30;
   return Math.round(s);
 }
 
@@ -703,6 +707,7 @@ function parsePresencaCAP(text, athletesList) {
 
   (data || []).forEach(row => {
     const nome = String(row['Nome'] || row['Atleta'] || '').trim();
+    const nomeCatapult = String(row['Nome catapult'] || row['nome catapult'] || row['Nome Catapult'] || '').trim();
     const dataStr = row['Data'] || row['DATA'] || row['data'];
     const grupo = String(row['Grupo'] || row['GRUPO'] || '').trim();
     const tipoDia = String(row['Dia'] || row['DIA'] || row['Tipo'] || '').trim();
@@ -714,7 +719,9 @@ function parsePresencaCAP(text, athletesList) {
     const dataISO = parseDataFlex(dataStr);
     if (!dataISO) { dataInvalida++; return; }
 
-    const m = matchName(nome, regNames);
+    // Tenta match: primeiro pelo Nome, depois pelo Nome catapult
+    let m = matchName(nome, regNames);
+    if (!m && nomeCatapult) m = matchName(nomeCatapult, regNames);
     if (!m) { semAtleta++; naoEncontrados.add(nome); return; }
     const athlete = athletesList.find(a => a.name === m.name);
     if (!athlete) { semAtleta++; naoEncontrados.add(nome); return; }
