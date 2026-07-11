@@ -928,7 +928,7 @@ function Spinner() {
 }
 
 // ── SESSION VIEW ─────────────────────────────────────────────────────────────
-function SessionView({athletes,profiles,bars}) {
+function SessionView({athletes,profiles,bars,snapshots,savePresencaSessao,loadPresencaSessao}) {
   const [ex,setEx]   = useState("Back Squat");
   const [velIdx,setVI]= useState(11);
   const [ser,setSer] = useState(3);
@@ -1102,7 +1102,7 @@ function SessionView({athletes,profiles,bars}) {
       onClose:()=>setShowSel(false)
     }),
 
-    showRpt&&el(ReportModal,{grouped,zone,vel,ser,rep,bars,date,onClose:()=>setRpt(false)})
+    showRpt&&el(ReportModal,{grouped,zone,vel,ser,rep,bars,date,snapshots,savePresencaSessao,loadPresencaSessao,onClose:()=>setRpt(false)})
   );
 }
 
@@ -2152,11 +2152,15 @@ function GroupCard({grp,gi,athletes,zone,ser,rep}) {
 }
 
 // ── REPORT MODAL ─────────────────────────────────────────────────────────────
-function ReportModal({grouped,zone,vel,ser,rep,bars,date,onClose}) {
+function ReportModal({grouped,zone,vel,ser,rep,bars,date,snapshots,savePresencaSessao,loadPresencaSessao,onClose}) {
   const el=React.createElement;
   const tRef=useRef();
   const [saving,setSaving]=useState(false);
   const [copied,setCopied]=useState(false);
+  // Presença: {athleteId: 'presente'|'ausente'}
+  const [presencaMap, setPresencaMap] = useState({});
+  const [showPresenca, setShowPresenca] = useState(false);
+  const [savingPresenca, setSavingPresenca] = useState(false);
 
   const RED="#C8102E", BLACK="#111111", WHITE="#FFFFFF", LGRAY="#F4F4F4", MGRAY="#E0E0E0", DGRAY="#444444";
 
@@ -2193,6 +2197,52 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,onClose}) {
   const half = Math.ceil(rows.length / 2);
   const columns = [rows.slice(0, half), rows.slice(half)];
 
+  // Todos os atletas na sessão
+  const allAthletes = useMemo(() => rows.map(r => r.a), [rows]);
+
+  // Popula presença ao montar: primeiro tenta carregar do banco;
+  // se não tem, marca automaticamente quem tem snapshot VBT no dia
+  React.useEffect(() => {
+    (async () => {
+      if (!loadPresencaSessao) {
+        // Fallback sem persistência: todos presentes
+        const m = {};
+        allAthletes.forEach(a => { m[a.id] = 'presente'; });
+        setPresencaMap(m);
+        return;
+      }
+      const saved = await loadPresencaSessao(date);
+      const savedMap = {};
+      (saved || []).forEach(r => { savedMap[r.atleta_id] = r.status; });
+      const athleteIdsComSnapshot = new Set(
+        (snapshots || []).filter(s => s.session_date === date).map(s => s.athlete_id)
+      );
+      const m = {};
+      allAthletes.forEach(a => {
+        if (savedMap[a.id]) m[a.id] = savedMap[a.id];
+        else m[a.id] = athleteIdsComSnapshot.has(a.id) ? 'presente' : 'ausente';
+      });
+      setPresencaMap(m);
+    })();
+  }, [date, snapshots, loadPresencaSessao, allAthletes]);
+
+  const togglePresenca = (id) => {
+    setPresencaMap(m => ({...m, [id]: m[id] === 'presente' ? 'ausente' : 'presente'}));
+  };
+
+  const presentesCount = Object.values(presencaMap).filter(v => v === 'presente').length;
+  const ausentesCount = Object.values(presencaMap).filter(v => v === 'ausente').length;
+
+  const salvarPresenca = async () => {
+    if (!savePresencaSessao) return;
+    setSavingPresenca(true);
+    try {
+      const res = await savePresencaSessao(date, presencaMap, 'manual');
+      if (res.erro) alert("Erro ao salvar presença: " + res.erro);
+    } catch(e) { alert("Erro: " + e.message); }
+    setSavingPresenca(false);
+  };
+
   // Font sizes auto-adjust based on number of rows per column
   const maxRows = half;
   const sz = {
@@ -2203,10 +2253,16 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,onClose}) {
     pad:    maxRows<=6?"14px 12px" : maxRows<=10?"11px 12px" : "8px 10px",
   };
 
-  const savePNG=()=>{
+  const savePNG=async ()=>{
     const node=tRef.current; if(!node) return;
     if(!window.html2canvas){alert("html2canvas não carregou.");return;}
     setSaving(true);
+
+    // Salva presença no banco antes de gerar PNG (não bloqueia se falhar)
+    if (savePresencaSessao && Object.keys(presencaMap).length > 0) {
+      try { await savePresencaSessao(date, presencaMap, 'manual'); }
+      catch(e) { console.warn("Falha ao salvar presença antes do PNG:", e); }
+    }
 
     // Alvo: 14.04cm × 15.12cm @ 300 DPI
     const DPI=300;
@@ -2329,17 +2385,21 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,onClose}) {
       )
     ),
     // Rows
-    ...colRows.map((r,ri)=>
-      el("div",{key:ri,style:{
+    ...colRows.map((r,ri)=>{
+      const absent = presencaMap[r.a.id] === 'ausente';
+      return el("div",{key:ri,style:{
         display:"grid",gridTemplateColumns:"120px 1fr 1fr 1fr",
-        background:ri%2===0?WHITE:LGRAY,
+        background: absent ? "#E5E7EB" : (ri%2===0?WHITE:LGRAY),
         borderBottom:"1px solid "+MGRAY,
-        borderLeft:"3px solid "+r.color
+        borderLeft:"3px solid "+(absent ? "#9CA3AF" : r.color),
+        opacity: absent ? 0.55 : 1
       }},
         el("div",{style:{padding:sz.pad,display:"flex",alignItems:"center",borderRight:"1px solid "+MGRAY}},
           el("span",{style:{fontWeight:700,
             fontSize:(()=>{const n=r.a.nickname||r.a.name.split(" ")[0]; return n.length>10?sz.name-2:sz.name;})(),
-            color:BLACK,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},
+            color: absent ? "#6B7280" : BLACK,
+            textDecoration: absent ? "line-through" : "none",
+            whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},
             r.a.nickname||r.a.name.split(" ")[0])
         ),
         ...[r.sq,r.tb,r.ht].map((v,vi)=>
@@ -2349,14 +2409,14 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,onClose}) {
           }},
             v
               ? el("div",{style:{display:"flex",alignItems:"baseline",gap:3,justifyContent:"center"}},
-                  el("span",{style:{fontWeight:900,fontSize:sz.value,color:BLACK,letterSpacing:"-.01em"}},v.total),
-                  el("span",{style:{fontSize:sz.paren,color:DGRAY}},"("+v.lado+")")
+                  el("span",{style:{fontWeight:900,fontSize:sz.value,color: absent ? "#9CA3AF" : BLACK,letterSpacing:"-.01em"}},v.total),
+                  el("span",{style:{fontSize:sz.paren,color:absent ? "#9CA3AF" : DGRAY}},"("+v.lado+")")
                 )
               : el("span",{style:{color:MGRAY,fontSize:sz.value}},"—")
           )
         )
-      )
-    )
+      );
+    })
   );
 
   return el("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:300,
@@ -2373,6 +2433,11 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,onClose}) {
           el("div",{style:{fontSize:11,color:"#888",marginTop:1}},
             zone.min.toFixed(2)+"–"+zone.max.toFixed(2)+" m/s · "+zone.label+" · "+ser+"×"+rep+" · "+rows.length+" atletas")
         ),
+        el("button",{onClick:()=>setShowPresenca(!showPresenca),style:{padding:"7px 12px",borderRadius:8,
+          border:"1.5px solid "+(showPresenca?"#38A169":"#555"),
+          background:showPresenca?"#38A169":"#222",color:showPresenca?WHITE:"#ccc",
+          fontSize:12,fontWeight:700,cursor:"pointer"}},
+          "✓ "+presentesCount+" · ✗ "+ausentesCount),
         el("button",{onClick:savePNG,style:{padding:"7px 14px",borderRadius:8,border:"1.5px solid #555",
           background:"#222",color:"#ccc",fontSize:12,fontWeight:700,cursor:"pointer",opacity:saving?.6:1}},
           saving?"Gerando…":"🖼 PNG"),
@@ -2381,6 +2446,37 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,onClose}) {
           copied?"✓ Copiado!":"📋 PPT"),
         el("button",{onClick:onClose,style:{width:30,height:30,borderRadius:8,border:"1px solid #444",
           background:"#222",color:"#888",fontSize:18,cursor:"pointer"}},"×")
+      ),
+
+      // Painel de presença (colapsável)
+      showPresenca && el("div",{style:{background:"#111",padding:"12px 18px",borderBottom:"1px solid #333",
+        display:"flex",flexDirection:"column",gap:10,maxHeight:280,overflowY:"auto"}},
+        el("div",{style:{display:"flex",alignItems:"center",gap:10,justifyContent:"space-between"}},
+          el("div",{style:{fontSize:11,color:"#888"}},
+            "Clique num atleta pra alternar presente/ausente. Salva ao gerar PNG."),
+          el("button",{onClick:salvarPresenca,disabled:savingPresenca,style:{
+            padding:"5px 12px",borderRadius:6,border:"none",background:savingPresenca?"#555":"#38A169",
+            color:WHITE,fontSize:11,fontWeight:800,cursor:savingPresenca?"wait":"pointer"
+          }}, savingPresenca?"Salvando…":"💾 Salvar agora")
+        ),
+        el("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(140px, 1fr))",gap:4}},
+          ...allAthletes.map(a => {
+            const isPresent = presencaMap[a.id] === 'presente';
+            return el("button",{key:a.id,onClick:()=>togglePresenca(a.id),style:{
+              padding:"5px 8px",borderRadius:5,cursor:"pointer",textAlign:"left",
+              border:"1px solid "+(isPresent?"#38A169":"#4B5563"),
+              background:isPresent?"rgba(56,161,105,0.15)":"rgba(75,85,99,0.25)",
+              color:isPresent?"#86EFAC":"#9CA3AF",
+              fontSize:11,fontWeight:600,
+              display:"flex",alignItems:"center",gap:5,
+              textDecoration:isPresent?"none":"line-through"
+            }},
+              el("span",{style:{fontSize:10}}, isPresent ? "✓" : "✗"),
+              el("span",{style:{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                a.nickname||a.name.split(" ")[0])
+            );
+          })
+        )
       ),
 
       // Scroll — preview only, PNG captures tRef directly
@@ -3864,6 +3960,32 @@ function App() {
     await api.patch('presenca_sessao', 'id', recordId, body);
   }, []);
 
+  // Salva presença de sessão VBT (contexto='vbt')
+  const savePresencaSessao = React.useCallback(async (dateStr, presencaMap, source) => {
+    const records = Object.entries(presencaMap).map(([atleta_id, status]) => ({
+      atleta_id, data: dateStr, periodo: null, contexto: 'vbt',
+      status, source: source || 'manual', club_id: CLUB_ID
+    }));
+    if (records.length === 0) return { inseridos: 0 };
+    try {
+      const res = await api.upsert('presenca_sessao', records, 'atleta_id,data,periodo,contexto');
+      return { inseridos: Array.isArray(res) ? res.length : records.length };
+    } catch(e) {
+      console.error("Erro ao salvar presença VBT:", e);
+      return { inseridos: 0, erro: e.message };
+    }
+  }, []);
+
+  // Carrega presença de sessão VBT do dia
+  const loadPresencaSessao = React.useCallback(async (dateStr) => {
+    if (!dateStr) return [];
+    try {
+      const rows = await api.get('presenca_sessao',
+        'club_id=eq.' + CLUB_ID + '&data=eq.' + dateStr + '&contexto=eq.vbt');
+      return rows || [];
+    } catch(e) { console.error("Erro load presença VBT:", e); return []; }
+  }, []);
+
   // CRUD operations
   const saveAthlete = async (data) => {
     setSyncing(true);
@@ -4087,7 +4209,7 @@ function App() {
       error && el("div", {style: {padding: "10px 20px", background: "#FFF5F5", color: "#C53030", fontSize: 13}}, "Erro: " + error),
       !dataLoaded && el(Spinner),
       dataLoaded && view === "dashboard" && el(DashboardView, {athletes, profiles, loadMonth, microDays, snapshots}),
-      dataLoaded && view === "session"  && el(SessionView,  {athletes, profiles, bars}),
+      dataLoaded && view === "session"  && el(SessionView,  {athletes, profiles, bars, snapshots, savePresencaSessao, loadPresencaSessao}),
       dataLoaded && view === "micro"    && el(MicrocycleView, {microDays, saveMicroDay, loadMonth, selectedCategoria, setSelectedCategoria}),
       dataLoaded && view === "athletes" && el(AthletesView, {athletes, setAthletes, profiles, setProfiles, saveAthlete, deleteAthlete, saveProfiles}),
       dataLoaded && view === "presenca" && el(PresencaView, {athletes, importPresenca, loadPresencaDia, updatePresenca}),
