@@ -661,36 +661,44 @@ function parsePresencaCAP(text, athletesList) {
   const regNames = athletesList.map(a => a.name);
   const { data } = window.Papa.parse(text, { header: true, skipEmptyLines: true });
 
-  // Detecta formato de data: BR (DD/MM/YYYY) ou US (MM/DD/YYYY)
-  // Voto por evidência: se algum campo > 12, esse é o dia.
-  let brVotes = 0, usVotes = 0;
-  (data || []).forEach(row => {
-    const s = String(row['Data'] || row['DATA'] || row['data'] || '').trim();
-    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-    if (!m) return;
-    const [, a, b] = m;
-    if (+a > 12 && +b <= 12) brVotes++;
-    else if (+b > 12 && +a <= 12) usVotes++;
-  });
-  const format = usVotes > brVotes ? 'us' : 'br';
-
   const records = [];
   let ignoradas = 0, semAtleta = 0, comAtleta = 0, dataInvalida = 0;
+  let brDetectado = 0, usDetectado = 0;
   const naoEncontrados = new Set();
   const datasAfetadas = new Set();
 
+  // Decide formato POR LINHA:
+  //  - se algum dos dois números > 12, ele é o dia (definitivo)
+  //  - se ambos ≤ 12 (ambíguo): ano 2 dígitos → BR (padrão antigo do CSV do CAP)
+  //                             ano 4 dígitos → US (formato atual do CSV do CAP)
   const parseDataFlex = (s) => {
     if (!s) return null;
     const m = String(s).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
     if (!m) return null;
-    let [, a, b, y] = m;
+    let [, aStr, bStr, yStr] = m;
+    const A = +aStr, B = +bStr;
+    let y = yStr;
     if (y.length === 2) y = (Number(y) >= 70 ? '19' : '20') + y;
-    // Formato detectado dita a ordem
-    const day = format === 'us' ? b : a;
-    const month = format === 'us' ? a : b;
-    const dn = +day, mn = +month;
-    if (dn < 1 || dn > 31 || mn < 1 || mn > 12) return null;
-    return y + '-' + String(mn).padStart(2,'0') + '-' + String(dn).padStart(2,'0');
+
+    let day, month;
+    if (A > 12 && B <= 12) {
+      day = A; month = B; brDetectado++;
+    } else if (B > 12 && A <= 12) {
+      day = B; month = A; usDetectado++;
+    } else if (A <= 12 && B <= 12) {
+      // Ambíguo: usa formato do ano como pista
+      if (yStr.length === 4) {
+        // US (formato atual)
+        day = B; month = A; usDetectado++;
+      } else {
+        // BR (formato antigo)
+        day = A; month = B; brDetectado++;
+      }
+    } else {
+      return null;
+    }
+    if (day < 1 || day > 31 || month < 1 || month > 12) return null;
+    return y + '-' + String(month).padStart(2,'0') + '-' + String(day).padStart(2,'0');
   };
 
   (data || []).forEach(row => {
@@ -735,6 +743,10 @@ function parsePresencaCAP(text, athletesList) {
     datasAfetadas.add(dataISO);
   });
 
+  const formatoLabel = usDetectado > 0 && brDetectado > 0
+    ? 'misto (' + brDetectado + ' BR + ' + usDetectado + ' US)'
+    : usDetectado > 0 ? 'MM/DD/AAAA (americano)' : 'DD/MM/AAAA (brasileiro)';
+
   return {
     records,
     stats: {
@@ -742,7 +754,7 @@ function parsePresencaCAP(text, athletesList) {
       comAtleta, semAtleta, ignoradas, dataInvalida,
       naoEncontrados: [...naoEncontrados],
       datasAfetadas: [...datasAfetadas].sort(),
-      formatoDetectado: format
+      formatoDetectado: formatoLabel
     }
   };
 }
@@ -3527,12 +3539,11 @@ function PresencaView({ athletes, importPresenca, loadPresencaDia }) {
               "\nSem atleta correspondente: " + stats.semAtleta);
       } else {
         const result = await importPresenca(records, stats.datasAfetadas);
-        const fmtLabel = stats.formatoDetectado === 'us' ? 'MM/DD/AAAA (americano)' : 'DD/MM/AAAA (brasileiro)';
         let msg;
         if (result.inseridos === 0) {
           msg = "⚠️ NENHUM registro foi salvo no banco.\n\n" +
                 "Foram enviados " + records.length + " registros mas todos falharam.\n" +
-                "Formato de data detectado: " + fmtLabel + "\n" +
+                "Formato de data detectado: " + stats.formatoDetectado + "\n" +
                 "Abra o console (F12) e me manda o erro que aparece lá.\n\n";
           if (result.errosDetalhe.length) {
             msg += "Primeiros erros:\n" + result.errosDetalhe.slice(0,3).join('\n');
@@ -3541,7 +3552,7 @@ function PresencaView({ athletes, importPresenca, loadPresencaDia }) {
           msg = "Importação concluída:\n\n" +
                 "• " + result.inseridos + " registros salvos\n" +
                 "• " + stats.datasAfetadas.length + " dia(s) atualizado(s)\n" +
-                "• Formato de data: " + fmtLabel;
+                "• Formato de data: " + stats.formatoDetectado;
           if (result.falhas > 0) msg += "\n\n⚠️ " + result.falhas + " registros FALHARAM (ver console)";
         }
         if (stats.dataInvalida > 0) {
