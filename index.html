@@ -606,9 +606,20 @@ function nameScore(a, b) {
   const setA=new Set(ta), setB=new Set(tb);
   if (ta.every(t=>setB.has(t)) && tb.every(t=>setA.has(t))) return 95;
   // Caso especial: 1 dos nomes tem só 1 token (típico de apelido/nome curto)
-  // Aceita match se esse único token aparece em qualquer posição do outro nome
   if (ta.length === 1 && tb.length > 1 && setB.has(ta[0])) return 85;
   if (tb.length === 1 && ta.length > 1 && setA.has(tb[0])) return 85;
+  // Caso "Gilberto M." vs "Gilberto Moraes Junior":
+  // primeiro token bate + algum token do outro lado começa com a inicial
+  const initialMatch = (short, long) => {
+    if (short.length < 2 || long.length < 2) return false;
+    if (short[0] !== long[0]) return false;
+    // Segundo token do short é inicial (1 letra) que bate início de algum token do long
+    const initial = short[1];
+    if (initial.length !== 1) return false;
+    return long.slice(1).some(t => t.startsWith(initial));
+  };
+  if (ta.length >= 2 && tb.length >= 2 &&
+      (initialMatch(ta, tb) || initialMatch(tb, ta))) return 80;
   // Sobrenome (último token) deve obrigatoriamente bater para score alto
   const lastA=ta.at(-1), lastB=tb.at(-1);
   if (!lastA||!lastB||lastA!==lastB) return 0;
@@ -662,7 +673,22 @@ async function readCSVFileWithEncoding(file) {
 
 // Parse da planilha CAP (DBgrupos): retorna { records, stats } sem inserir em banco
 function parsePresencaCAP(text, athletesList) {
-  const regNames = athletesList.map(a => a.name);
+  // Constrói lista de aliases (name + nickname) → athlete_id
+  const aliases = [];
+  athletesList.forEach(a => {
+    if (a.name) aliases.push({ id: a.id, alias: a.name });
+    if (a.nickname && a.nickname !== a.name) aliases.push({ id: a.id, alias: a.nickname });
+  });
+  const aliasNames = aliases.map(x => x.alias);
+
+  const findAthlete = (csvName) => {
+    if (!csvName) return null;
+    const m = matchName(csvName, aliasNames);
+    if (!m) return null;
+    const hit = aliases.find(x => x.alias === m.name);
+    return hit ? athletesList.find(a => a.id === hit.id) : null;
+  };
+
   const { data } = window.Papa.parse(text, { header: true, skipEmptyLines: true });
 
   const records = [];
@@ -671,10 +697,6 @@ function parsePresencaCAP(text, athletesList) {
   const naoEncontrados = new Set();
   const datasAfetadas = new Set();
 
-  // Decide formato POR LINHA:
-  //  - se algum dos dois números > 12, ele é o dia (definitivo)
-  //  - se ambos ≤ 12 (ambíguo): ano 2 dígitos → BR (padrão antigo do CSV do CAP)
-  //                             ano 4 dígitos → US (formato atual do CSV do CAP)
   const parseDataFlex = (s) => {
     if (!s) return null;
     const m = String(s).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
@@ -683,24 +705,13 @@ function parsePresencaCAP(text, athletesList) {
     const A = +aStr, B = +bStr;
     let y = yStr;
     if (y.length === 2) y = (Number(y) >= 70 ? '19' : '20') + y;
-
     let day, month;
-    if (A > 12 && B <= 12) {
-      day = A; month = B; brDetectado++;
-    } else if (B > 12 && A <= 12) {
-      day = B; month = A; usDetectado++;
-    } else if (A <= 12 && B <= 12) {
-      // Ambíguo: usa formato do ano como pista
-      if (yStr.length === 4) {
-        // US (formato atual)
-        day = B; month = A; usDetectado++;
-      } else {
-        // BR (formato antigo)
-        day = A; month = B; brDetectado++;
-      }
-    } else {
-      return null;
-    }
+    if (A > 12 && B <= 12) { day = A; month = B; brDetectado++; }
+    else if (B > 12 && A <= 12) { day = B; month = A; usDetectado++; }
+    else if (A <= 12 && B <= 12) {
+      if (yStr.length === 4) { day = B; month = A; usDetectado++; }
+      else { day = A; month = B; brDetectado++; }
+    } else return null;
     if (day < 1 || day > 31 || month < 1 || month > 12) return null;
     return y + '-' + String(month).padStart(2,'0') + '-' + String(day).padStart(2,'0');
   };
@@ -719,11 +730,9 @@ function parsePresencaCAP(text, athletesList) {
     const dataISO = parseDataFlex(dataStr);
     if (!dataISO) { dataInvalida++; return; }
 
-    // Tenta match: primeiro pelo Nome, depois pelo Nome catapult
-    let m = matchName(nome, regNames);
-    if (!m && nomeCatapult) m = matchName(nomeCatapult, regNames);
-    if (!m) { semAtleta++; naoEncontrados.add(nome); return; }
-    const athlete = athletesList.find(a => a.name === m.name);
+    // Tenta match: primeiro pelo Nome, depois pelo Nome catapult (contra name+nickname)
+    let athlete = findAthlete(nome);
+    if (!athlete && nomeCatapult) athlete = findAthlete(nomeCatapult);
     if (!athlete) { semAtleta++; naoEncontrados.add(nome); return; }
 
     const tipoLower = tipoDia.toLowerCase();
@@ -3509,16 +3518,34 @@ function DashboardView({athletes, profiles, loadMonth, microDays, snapshots}) {
 
 
 
+// Cores dos grupos (extensível — grupos não mapeados usam cinza)
+const GRUPO_COLORS = {
+  "G1": "#2563EB", "G2": "#38A169", "G3": "#D69E2E", "G4": "#805AD5",
+  "DM": "#C53030", "RTP": "#DD6B20",
+  "Fisio": "#EC4899", "Sel": "#0891B2", "Mercado": "#4B5563",
+  "Ausentes": "#64748B", "Sem grupo": "#94A3B8"
+};
+const grupoColor = (nome) => GRUPO_COLORS[nome] || "#64748B";
+const grupoOrder = (nome) => {
+  const order = ["G1","G2","G3","G4","DM","RTP"];
+  const idx = order.indexOf(nome);
+  if (idx >= 0) return idx;
+  if (nome === "Ausentes") return 999;
+  if (nome === "Sem grupo") return 998;
+  return 100 + nome.charCodeAt(0);
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PRESENÇA — importa planilha CAP, mostra atletas do dia agrupados por G1/G2/etc
 // ═══════════════════════════════════════════════════════════════════════════
-function PresencaView({ athletes, importPresenca, loadPresencaDia }) {
+function PresencaView({ athletes, importPresenca, loadPresencaDia, updatePresenca }) {
   const el = React.createElement;
   const fileRef = useRef();
   const [importing, setImporting] = useState(false);
   const [dataConsulta, setDataConsulta] = useState(() => localDateStr(new Date()));
   const [registrosDia, setRegistrosDia] = useState([]);
   const [loadingDia, setLoadingDia] = useState(false);
+  const [editing, setEditing] = useState(null);
 
   const carregarDia = React.useCallback(async (d) => {
     if (!d) return;
@@ -3581,17 +3608,19 @@ function PresencaView({ athletes, importPresenca, loadPresencaDia }) {
     e.target.value = '';
   };
 
-  // Agrupa registros por grupo
+  // Agrupa registros por grupo (aceita QUALQUER grupo do CSV, não só canônicos)
   const porGrupo = useMemo(() => {
     const g = {};
     registrosDia.forEach(r => {
-      const key = r.grupo || (r.status === 'ausente' ? 'Ausentes' : 'Sem grupo');
+      let key;
+      if (r.status === 'ausente') key = 'Ausentes';
+      else key = r.grupo || 'Sem grupo';
       if (!g[key]) g[key] = [];
       g[key].push(r);
     });
-    // Ordem canônica
-    const order = ['G1','G2','G3','G4','DM','RTP','Ausentes','Sem grupo'];
-    return order.filter(k => g[k]).map(k => ({ nome: k, items: g[k] }));
+    return Object.entries(g)
+      .map(([nome, items]) => ({ nome, items }))
+      .sort((a, b) => grupoOrder(a.nome) - grupoOrder(b.nome));
   }, [registrosDia]);
 
   const atletaById = useMemo(() => {
@@ -3624,26 +3653,20 @@ function PresencaView({ athletes, importPresenca, loadPresencaDia }) {
           loadingDia ? "Carregando..." : "Nenhum registro para este dia. Importe uma planilha CAP acima.")
       : el("div", {style:{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))",gap:12}},
           ...porGrupo.map(g => {
-            const cor = g.nome === "G1" ? "#2563EB"
-                    : g.nome === "G2" ? "#38A169"
-                    : g.nome === "G3" ? "#D69E2E"
-                    : g.nome === "G4" ? "#805AD5"
-                    : g.nome === "DM" ? "#C53030"
-                    : g.nome === "RTP" ? "#DD6B20"
-                    : "#64748B";
+            const cor = grupoColor(g.nome);
             return el("div", {key:g.nome, style:{
               background:T.card, border:"1px solid "+T.border, borderRadius:10, padding:"12px 14px", minWidth:0
             }},
               el("div", {style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,paddingBottom:8,borderBottom:"1px solid "+T.border}},
-                el("span", {style:{fontSize:14,fontWeight:900,color:cor,letterSpacing:".02em"}}, g.nome),
+                el("span", {style:{fontSize:14,fontWeight:900,color:cor,letterSpacing:".02em",textTransform:"uppercase"}}, g.nome),
                 el("span", {style:{fontSize:11,fontWeight:700,color:T.muted}}, g.items.length + " atleta" + (g.items.length===1?"":"s"))
               ),
               el("div", {style:{display:"flex",flexDirection:"column",gap:4}},
                 ...g.items.map(r => {
-                  const a = atletaById[r.athlete_id];
+                  const a = atletaById[r.atleta_id];
                   const nome = a ? (a.nickname || a.name) : "?";
-                  return el("div", {key:r.athlete_id + r.contexto, style:{
-                    display:"flex",alignItems:"center",gap:8,padding:"5px 8px",borderRadius:6,
+                  return el("div", {key:r.id, onClick:()=>setEditing(r), style:{
+                    display:"flex",alignItems:"center",gap:8,padding:"5px 8px",borderRadius:6,cursor:"pointer",
                     background: r.status === "ausente" ? "#FEF2F2" : "#F1F5F9"
                   }},
                     a && el(Avatar, {name:a.name, photo:a.photo_url, size:22}),
@@ -3654,7 +3677,99 @@ function PresencaView({ athletes, importPresenca, loadPresencaDia }) {
               )
             );
           })
+        ),
+
+    // Modal de edição
+    editing && el(PresencaEditModal, {
+      record: editing,
+      atleta: atletaById[editing.atleta_id],
+      onSave: async (updates) => {
+        try {
+          await updatePresenca(editing.id, updates);
+          await carregarDia(dataConsulta);
+          setEditing(null);
+        } catch(e) { alert("Erro ao salvar: " + e.message); }
+      },
+      onClose: () => setEditing(null)
+    })
+  );
+}
+
+// Modal simples pra editar registro de presença
+function PresencaEditModal({ record, atleta, onSave, onClose }) {
+  const el = React.createElement;
+  const [grupo, setGrupo] = useState(record.grupo || '');
+  const [status, setStatus] = useState(record.status || 'presente');
+  const [motivo, setMotivo] = useState(record.motivo || '');
+  const [observacao, setObservacao] = useState(record.observacao || '');
+  const gruposSugeridos = ["G1","G2","G3","G4","DM","RTP","Fisio","Sel","Mercado"];
+
+  return el("div", {onClick: onClose, style:{
+    position:"fixed", inset:0, background:"rgba(15,23,42,.45)", zIndex:200,
+    display:"flex", alignItems:"center", justifyContent:"center", padding:20
+  }},
+    el("div", {onClick:e=>e.stopPropagation(), style:{
+      background:"#fff", borderRadius:12, padding:"20px 22px", width:"100%", maxWidth:420,
+      display:"flex", flexDirection:"column", gap:12, boxShadow:"0 30px 80px rgba(0,0,0,.3)"
+    }},
+      el("div", {style:{display:"flex",alignItems:"center",gap:10}},
+        atleta && el(Avatar, {name:atleta.name, photo:atleta.photo_url, size:34}),
+        el("div", null,
+          el("div", {style:{fontSize:14, fontWeight:800, color:T.text}}, atleta ? (atleta.nickname || atleta.name) : "?"),
+          el("div", {style:{fontSize:11, color:T.muted}}, record.data)
         )
+      ),
+      el("div", null,
+        el("div", {style:{fontSize:10,fontWeight:800,color:T.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:4}}, "Grupo"),
+        el("div", {style:{display:"flex",gap:4,flexWrap:"wrap",marginBottom:6}},
+          ...gruposSugeridos.map(g => el("button", {key:g, onClick:()=>setGrupo(g), style:{
+            padding:"4px 10px", borderRadius:5, fontSize:11, fontWeight:700, cursor:"pointer",
+            border: "1.5px solid " + (grupo === g ? grupoColor(g) : T.border),
+            background: grupo === g ? grupoColor(g) + "15" : "#fff",
+            color: grupo === g ? grupoColor(g) : T.muted
+          }}, g))
+        ),
+        el("input", {value:grupo, onChange:e=>setGrupo(e.target.value), placeholder:"Ou digite outro",
+          style:{width:"100%", padding:"6px 8px", borderRadius:6, border:"1px solid "+T.border, fontSize:12}})
+      ),
+      el("div", null,
+        el("div", {style:{fontSize:10,fontWeight:800,color:T.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:4}}, "Status"),
+        el("div", {style:{display:"flex",gap:4}},
+          ...[{v:"presente",l:"Presente",c:"#38A169"}, {v:"ausente",l:"Ausente",c:"#C53030"}].map(x =>
+            el("button", {key:x.v, onClick:()=>setStatus(x.v), style:{
+              flex:1, padding:"6px", borderRadius:6, fontSize:12, fontWeight:700, cursor:"pointer",
+              border: "1.5px solid " + (status === x.v ? x.c : T.border),
+              background: status === x.v ? x.c : "#fff",
+              color: status === x.v ? "#fff" : T.muted
+            }}, x.l))
+        )
+      ),
+      el("div", null,
+        el("div", {style:{fontSize:10,fontWeight:800,color:T.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:4}}, "Motivo"),
+        el("input", {value:motivo, onChange:e=>setMotivo(e.target.value), placeholder:"Ex: folga, LCA, gripe…",
+          style:{width:"100%", padding:"6px 8px", borderRadius:6, border:"1px solid "+T.border, fontSize:12}})
+      ),
+      el("div", null,
+        el("div", {style:{fontSize:10,fontWeight:800,color:T.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:4}}, "Observação"),
+        el("input", {value:observacao, onChange:e=>setObservacao(e.target.value), placeholder:"Notas adicionais",
+          style:{width:"100%", padding:"6px 8px", borderRadius:6, border:"1px solid "+T.border, fontSize:12}})
+      ),
+      el("div", {style:{display:"flex",gap:8,marginTop:6}},
+        el("button", {onClick:onClose, style:{
+          flex:1, padding:"8px", borderRadius:7, border:"1px solid "+T.border, background:"#fff",
+          fontSize:12, fontWeight:700, cursor:"pointer", color:T.sub
+        }}, "Cancelar"),
+        el("button", {onClick: () => onSave({
+          grupo: grupo.trim() || null,
+          status,
+          motivo: motivo.trim() || null,
+          observacao: observacao.trim() || null
+        }), style:{
+          flex:1, padding:"8px", borderRadius:7, border:"none", background:T.accent, color:"#fff",
+          fontSize:12, fontWeight:800, cursor:"pointer"
+        }}, "Salvar")
+      )
+    )
   );
 }
 
@@ -3742,6 +3857,11 @@ function App() {
       ...r,
       athlete_id: r.atleta_id || r.athlete_id
     }));
+  }, []);
+
+  const updatePresenca = React.useCallback(async (recordId, updates) => {
+    const body = { ...updates, updated_at: new Date().toISOString(), source: 'manual' };
+    await api.patch('presenca_sessao', 'id', recordId, body);
   }, []);
 
   // CRUD operations
@@ -3970,7 +4090,7 @@ function App() {
       dataLoaded && view === "session"  && el(SessionView,  {athletes, profiles, bars}),
       dataLoaded && view === "micro"    && el(MicrocycleView, {microDays, saveMicroDay, loadMonth, selectedCategoria, setSelectedCategoria}),
       dataLoaded && view === "athletes" && el(AthletesView, {athletes, setAthletes, profiles, setProfiles, saveAthlete, deleteAthlete, saveProfiles}),
-      dataLoaded && view === "presenca" && el(PresencaView, {athletes, importPresenca, loadPresencaDia}),
+      dataLoaded && view === "presenca" && el(PresencaView, {athletes, importPresenca, loadPresencaDia, updatePresenca}),
       dataLoaded && view === "profiles" && el(ProfilesView, {athletes, profiles})
     ),
 
