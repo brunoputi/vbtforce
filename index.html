@@ -681,6 +681,42 @@ function parsePresencaCAP(text, athletesList) {
   });
   const aliasNames = aliases.map(x => x.alias);
 
+  // Match determinístico do formato "X I." — aceita ambos:
+  //  Padrão A: "Sobrenome I." (ex: "Peixoto R.")  → último token = sobrenome, primeiro começa com I
+  //  Padrão B: "Nome I."      (ex: "Renan V.")    → primeiro token = nome, último começa com I
+  const matchCatapultFormat = (csvName) => {
+    if (!csvName) return null;
+    const m = String(csvName).trim().match(/^(.+?)\s+([A-Za-zÀ-ú])\.?$/);
+    if (!m) return null;
+    const parte1 = normStr(m[1]);
+    const inicial = normStr(m[2]);
+    if (!parte1 || !inicial) return null;
+    // Padrão A: último token = parte1, primeiro começa com inicial
+    const matchA = athletesList.filter(a => {
+      const t = tokens(a.name);
+      return t.length >= 2 && t.at(-1) === parte1 && t[0].startsWith(inicial);
+    });
+    // Padrão B: primeiro token = parte1, último começa com inicial
+    const matchB = athletesList.filter(a => {
+      const t = tokens(a.name);
+      return t.length >= 2 && t[0] === parte1 && t.at(-1).startsWith(inicial);
+    });
+    // Junta matches únicos (por id)
+    const idsA = new Set(matchA.map(a => a.id));
+    const idsB = new Set(matchB.map(a => a.id));
+    const idsUnion = new Set([...idsA, ...idsB]);
+    if (idsUnion.size === 1) {
+      const id = [...idsUnion][0];
+      return athletesList.find(a => a.id === id) || null;
+    }
+    // Se A tem exatamente 1 e B tem 0 (ou vice versa), usa o único
+    if (matchA.length === 1 && matchB.length === 0) return matchA[0];
+    if (matchB.length === 1 && matchA.length === 0) return matchB[0];
+    // Ambíguo: dois atletas diferentes matchando por caminhos diferentes → null
+    return null;
+  };
+
+  // Match padrão via matchName (aliases = name + nickname)
   const findAthlete = (csvName) => {
     if (!csvName) return null;
     const m = matchName(csvName, aliasNames);
@@ -730,10 +766,19 @@ function parsePresencaCAP(text, athletesList) {
     const dataISO = parseDataFlex(dataStr);
     if (!dataISO) { dataInvalida++; return; }
 
-    // Tenta match: primeiro pelo Nome, depois pelo Nome catapult (contra name+nickname)
-    let athlete = findAthlete(nome);
+    // Estratégia de match (ordem):
+    // 1. Nome catapult com padrão determinístico (A ou B)
+    // 2. Nome (apelido curto) via matchName com detecção de empate
+    // 3. Nome catapult via matchName (fallback)
+    let athlete = null;
+    if (nomeCatapult) athlete = matchCatapultFormat(nomeCatapult);
+    if (!athlete) athlete = findAthlete(nome);
     if (!athlete && nomeCatapult) athlete = findAthlete(nomeCatapult);
-    if (!athlete) { semAtleta++; naoEncontrados.add(nome); return; }
+    if (!athlete) {
+      semAtleta++;
+      naoEncontrados.add(nomeCatapult ? (nome + ' (' + nomeCatapult + ')') : nome);
+      return;
+    }
 
     const tipoLower = tipoDia.toLowerCase();
     const isAusente = tipoLower.includes('folga') || tipoLower.includes('ausen');
@@ -746,7 +791,7 @@ function parsePresencaCAP(text, athletesList) {
     records.push({
       atleta_id: athlete.id,
       data: dataISO,
-      periodo: null,
+      periodo: 'dia',
       grupo: grupo || null,
       tipo_dia: tipoDia || null,
       status: isAusente ? 'ausente' : 'presente',
@@ -2238,12 +2283,17 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,snapshots,savePresencaS
   const presentesCount = Object.values(presencaMap).filter(v => v === 'presente').length;
   const ausentesCount = Object.values(presencaMap).filter(v => v === 'ausente').length;
 
+  const [presencaSaved, setPresencaSaved] = useState(false);
   const salvarPresenca = async () => {
     if (!savePresencaSessao) return;
     setSavingPresenca(true);
     try {
       const res = await savePresencaSessao(date, presencaMap, 'manual');
       if (res.erro) alert("Erro ao salvar presença: " + res.erro);
+      else {
+        setPresencaSaved(true);
+        setTimeout(() => setPresencaSaved(false), 2000);
+      }
     } catch(e) { alert("Erro: " + e.message); }
     setSavingPresenca(false);
   };
@@ -2460,9 +2510,11 @@ function ReportModal({grouped,zone,vel,ser,rep,bars,date,snapshots,savePresencaS
           el("div",{style:{fontSize:11,color:"#888"}},
             "Clique num atleta pra alternar presente/ausente. Salva ao gerar PNG."),
           el("button",{onClick:salvarPresenca,disabled:savingPresenca,style:{
-            padding:"5px 12px",borderRadius:6,border:"none",background:savingPresenca?"#555":"#38A169",
-            color:WHITE,fontSize:11,fontWeight:800,cursor:savingPresenca?"wait":"pointer"
-          }}, savingPresenca?"Salvando…":"💾 Salvar agora")
+            padding:"5px 12px",borderRadius:6,border:"none",
+            background: presencaSaved ? "#059669" : (savingPresenca ? "#555" : "#38A169"),
+            color:WHITE,fontSize:11,fontWeight:800,cursor:savingPresenca?"wait":"pointer",
+            transition: "background .2s"
+          }}, presencaSaved ? "✓ Salvo!" : (savingPresenca ? "Salvando…" : "💾 Salvar agora"))
         ),
         el("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(140px, 1fr))",gap:4}},
           ...allAthletes.map(a => {
@@ -3688,6 +3740,7 @@ function PresencaView({ athletes, importPresenca, loadPresencaDia, updatePresenc
                 "• " + result.inseridos + " registros salvos\n" +
                 "• " + stats.datasAfetadas.length + " dia(s) atualizado(s)\n" +
                 "• Formato de data: " + stats.formatoDetectado;
+          if (result.duplicatasRemovidas > 0) msg += "\n• " + result.duplicatasRemovidas + " duplicatas mescladas no import";
           if (result.falhas > 0) msg += "\n\n⚠️ " + result.falhas + " registros FALHARAM (ver console)";
         }
         if (stats.dataInvalida > 0) {
@@ -3927,14 +3980,26 @@ function App() {
 
   // === Presença ===
   const importPresenca = async (records, datasAfetadas) => {
-    // UPSERT em batches — a tabela tem UNIQUE(atleta_id, data, periodo, contexto).
-    // Se já existe registro pra (atleta, data, período, contexto), atualiza. Senão, cria.
-    // Estratégia não-destrutiva: mesmo se der erro em alguns, os outros são salvos.
+    // Deduplica por (atleta_id, data, periodo, contexto) mantendo o "mais completo"
+    // — se dois registros da planilha viraram o mesmo atleta na mesma data,
+    // mantém o que tem grupo preenchido; se ambos têm, o último ganha.
+    const dedup = new Map();
+    for (const r of records) {
+      const key = r.atleta_id + '|' + r.data + '|' + (r.periodo||'') + '|' + (r.contexto||'');
+      const existing = dedup.get(key);
+      if (!existing) { dedup.set(key, r); continue; }
+      // Prefere quem tem grupo/motivo/observacao preenchido
+      const scoreExisting = (existing.grupo?1:0) + (existing.motivo?1:0) + (existing.observacao?1:0);
+      const scoreNew = (r.grupo?1:0) + (r.motivo?1:0) + (r.observacao?1:0);
+      if (scoreNew >= scoreExisting) dedup.set(key, r);
+    }
+    const dedupedRecords = [...dedup.values()];
+
     const BATCH = 200;
     let inseridos = 0, falhas = 0;
     const errosDetalhe = [];
-    for (let i = 0; i < records.length; i += BATCH) {
-      const chunk = records.slice(i, i + BATCH).map(r => ({ ...r, club_id: CLUB_ID }));
+    for (let i = 0; i < dedupedRecords.length; i += BATCH) {
+      const chunk = dedupedRecords.slice(i, i + BATCH).map(r => ({ ...r, club_id: CLUB_ID }));
       try {
         const res = await api.upsert('presenca_sessao', chunk, 'atleta_id,data,periodo,contexto');
         if (Array.isArray(res)) inseridos += res.length;
@@ -3947,7 +4012,7 @@ function App() {
         errosDetalhe.push('Batch ' + i + ': ' + e.message);
       }
     }
-    return { inseridos, falhas, errosDetalhe };
+    return { inseridos, falhas, errosDetalhe, duplicatasRemovidas: records.length - dedupedRecords.length };
   };
 
   const loadPresencaDia = React.useCallback(async (dataStr) => {
@@ -3968,7 +4033,7 @@ function App() {
   // Salva presença de sessão VBT (contexto='vbt')
   const savePresencaSessao = React.useCallback(async (dateStr, presencaMap, source) => {
     const records = Object.entries(presencaMap).map(([atleta_id, status]) => ({
-      atleta_id, data: dateStr, periodo: null, contexto: 'vbt',
+      atleta_id, data: dateStr, periodo: 'sessao_vbt', contexto: 'vbt',
       status, source: source || 'manual', club_id: CLUB_ID
     }));
     if (records.length === 0) return { inseridos: 0 };
