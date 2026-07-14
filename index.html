@@ -1465,9 +1465,9 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
 
   // Paleta de cor por período (usada na célula do calendário)
   const PERIOD_PALETTE = {
-    am: { bg: "#FFFBEB", label: "M", color: "#D97706" },
-    pm: { bg: "#EFF6FF", label: "T", color: "#2563EB" },
-    pn: { bg: "#FAF5FF", label: "N", color: "#805AD5" }
+    am: { bg: "#F8FAFC", label: "M", color: "#94A3B8" },
+    pm: { bg: "#F8FAFC", label: "T", color: "#94A3B8" },
+    pn: { bg: "#F8FAFC", label: "N", color: "#94A3B8" }
   };
 
   // Renderiza uma metade da célula (manhã, tarde ou noite) — itera sub-blocos
@@ -1476,14 +1476,13 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
     const pal = PERIOD_PALETTE[period];
     const label = pal.label;
 
-    // Vazio: fundo colorido claro do período pra deixar visível o espaço
+    // Vazio: sem fundo colorido, só um traço discreto
     if (blocks.length === 0) {
       return el("div",{style:{
-        minHeight:20, padding:"4px 8px",
-        background: cur ? pal.bg : "transparent",
+        minHeight:16, padding:"2px 8px",
         display:"flex", alignItems:"center", flexShrink:0
       }},
-        el("span",{style:{fontSize:9,color:pal.color,opacity:.4,letterSpacing:".05em"}},"—")
+        el("span",{style:{fontSize:9,color:"#CBD5E0",letterSpacing:".05em"}},"—")
       );
     }
 
@@ -1846,7 +1845,7 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
     );
   };
 
-  return el("div",{style:{display:"flex",flexDirection:"column",flex:1,minHeight:0,overflowY:"auto",background:T.bg}},
+  return el("div",{style:{display:"flex",flexDirection:"column",flex:1,minHeight:0,overflow:"hidden",background:T.bg}},
     // Header (sem barra vermelha, sem emojis)
     el("div",{style:{padding:"12px 20px",borderBottom:"1px solid "+T.border,background:T.card,
       display:"flex",alignItems:"center",gap:10,flexShrink:0}},
@@ -1909,9 +1908,9 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
       )
     ),
     // Calendar + detail
-    el("div",{style:{display:"flex",flex:1,minHeight:0}},
+    el("div",{style:{display:"flex",flex:1,minHeight:0,overflow:"hidden"}},
       // Grid
-      el("div",{"data-micro-grid":true,style:{flex:1,padding:"12px 16px"}},
+      el("div",{"data-micro-grid":true,style:{flex:1,padding:"12px 16px",overflowY:"auto",minHeight:0}},
         // Título de exportação (hidden na tela, visível apenas no PNG)
         el("div",{"data-micro-export-title":true,style:{
           display:"none",padding:"8px 4px 16px",textAlign:"center"
@@ -1984,36 +1983,32 @@ function MicrocycleView({microDays, saveMicroDay, loadMonth, selectedCategoria, 
                       consolidatedGroups)
                   )
                 : [
-                    // Rótulo MANHÃ (amarelo)
-                    el("div",{key:"lbl-am",style:{
+                    // Divisor MANHÃ (sem fundo, tipo separator de seção)
+                    (!exporting || amBlocks.length > 0) && el("div",{key:"lbl-am",style:{
                       display:"flex", alignItems:"center", gap:6,
-                      padding:"0 8px", height:14, flexShrink:0,
-                      background:"#FEF3C7", borderBottom:"1px solid #FCD34D"
+                      padding:"3px 8px 1px", flexShrink:0
                     }},
-                      el("span",{style:{fontSize:8,fontWeight:800,color:"#B45309",letterSpacing:".1em"}},"MANHÃ"),
-                      el("div",{style:{flex:1,height:1,background:"#FCD34D"}})
+                      el("div",{style:{flex:1,height:1,background:"#E2E8F0"}}),
+                      el("span",{style:{fontSize:7.5,fontWeight:700,color:"#94A3B8",letterSpacing:".12em"}},"MANHÃ"),
+                      el("div",{style:{flex:1,height:1,background:"#E2E8F0"}})
                     ),
-                    // Manhã
-                    el(React.Fragment, {key:"am"}, renderHalf(dd, "am", cur)),
-                    // Rótulo TARDE (azul)
-                    el("div",{key:"lbl-pm",style:{
+                    (!exporting || amBlocks.length > 0) && el(React.Fragment, {key:"am"}, renderHalf(dd, "am", cur)),
+                    (!exporting || pmBlocks.length > 0) && el("div",{key:"lbl-pm",style:{
                       display:"flex", alignItems:"center", gap:6,
-                      padding:"0 8px", height:14, flexShrink:0,
-                      background:"#DBEAFE", borderTop:"1px solid #93C5FD", borderBottom:"1px solid #93C5FD"
+                      padding:"3px 8px 1px", flexShrink:0
                     }},
-                      el("span",{style:{fontSize:8,fontWeight:800,color:"#1D4ED8",letterSpacing:".1em"}},"TARDE"),
-                      el("div",{style:{flex:1,height:1,background:"#93C5FD"}})
+                      el("div",{style:{flex:1,height:1,background:"#E2E8F0"}}),
+                      el("span",{style:{fontSize:7.5,fontWeight:700,color:"#94A3B8",letterSpacing:".12em"}},"TARDE"),
+                      el("div",{style:{flex:1,height:1,background:"#E2E8F0"}})
                     ),
-                    // Tarde
-                    el(React.Fragment, {key:"pm"}, renderHalf(dd, "pm", cur)),
-                    // Rótulo NOITE (roxo) — só quando noite tem conteúdo
+                    (!exporting || pmBlocks.length > 0) && el(React.Fragment, {key:"pm"}, renderHalf(dd, "pm", cur)),
                     hasNoite && el("div",{key:"lbl-pn",style:{
                       display:"flex", alignItems:"center", gap:6,
-                      padding:"0 8px", height:14, flexShrink:0,
-                      background:"#EDE9FE", borderTop:"1px solid #C4B5FD", borderBottom:"1px solid #C4B5FD"
+                      padding:"3px 8px 1px", flexShrink:0
                     }},
-                      el("span",{style:{fontSize:8,fontWeight:800,color:"#6D28D9",letterSpacing:".1em"}},"NOITE"),
-                      el("div",{style:{flex:1,height:1,background:"#C4B5FD"}})
+                      el("div",{style:{flex:1,height:1,background:"#E2E8F0"}}),
+                      el("span",{style:{fontSize:7.5,fontWeight:700,color:"#94A3B8",letterSpacing:".12em"}},"NOITE"),
+                      el("div",{style:{flex:1,height:1,background:"#E2E8F0"}})
                     ),
                     hasNoite && el(React.Fragment, {key:"pn"}, renderHalf(dd, "pn", cur))
                   ]
