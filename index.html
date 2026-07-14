@@ -3205,6 +3205,60 @@ function ProfilesView({athletes,profiles}) {
   const [sel,setSel]=useState(null);
   const [ex,setEx]=useState("Back Squat");
   const [catFilter,setCatFilter]=useState("Todas");
+  const [showIssuesModal, setShowIssuesModal] = useState(false);
+
+  // === Detecção de perfis que precisam de teste ===
+  // Regras: <4 pontos | R² < 0.35 | todas cargas em velocidade > 0.7 m/s
+  const detectIssue = (pts, reg, e1rm, maxLoad, maxMpv) => {
+    if (!pts || pts.length === 0) return { severity: 4, motivo: "sem dados", acao: "iniciar teste com aquecimento leve depois subindo cargas até velocidade < 0.5 m/s" };
+    if (pts.length < 4) return {
+      severity: 3,
+      motivo: "só " + pts.length + (pts.length === 1 ? " ponto" : " pontos") + " coletado" + (pts.length === 1 ? "" : "s"),
+      acao: "coletar mais " + (4 - pts.length) + " ponto(s) em cargas diferentes"
+    };
+    // Todas velocidades altas → falta ponto pesado
+    const minMpv = Math.min(...pts.map(p => p.mpv));
+    if (minMpv > 0.7) {
+      const proxCarga = maxLoad ? Math.round(maxLoad * 1.15 / 5) * 5 : null;
+      return {
+        severity: 2,
+        motivo: "falta ponto pesado (menor vel: " + minMpv.toFixed(2) + " m/s)",
+        acao: proxCarga ? ("testar ~" + proxCarga + " kg buscando velocidade < 0.6") : "subir carga até velocidade < 0.6 m/s"
+      };
+    }
+    // R² fraco
+    if (reg && reg.r2 !== undefined && reg.r2 < 0.35) {
+      return {
+        severity: 1,
+        motivo: "regressão fraca (R²=" + reg.r2.toFixed(2) + ")",
+        acao: "refazer com cargas mais espalhadas entre leve e pesado"
+      };
+    }
+    // Slope ruim
+    if (reg && reg.slope > -0.004) {
+      return {
+        severity: 1,
+        motivo: "curva quase plana (slope=" + (reg.slope||0).toFixed(3) + ")",
+        acao: "cargas testadas muito próximas — variar mais"
+      };
+    }
+    return null; // OK
+  };
+
+  const issues = useMemo(() => {
+    const list = [];
+    athletes.filter(a => a.status === "ativo").forEach(a => {
+      const prof = resolveProfile(a.name, profiles);
+      EXERCISES.forEach(exName => {
+        const exProf = prof && prof[exName];
+        const pts = (exProf && exProf.pts) || [];
+        const reg = exProf && exProf.reg;
+        const issue = detectIssue(pts, reg, exProf && exProf.e1rm, exProf && (exProf.maxLoad||exProf.max_load), exProf && (exProf.maxMpv||exProf.max_mpv));
+        if (issue) list.push({ athlete: a, exercise: exName, ...issue });
+      });
+    });
+    return list.sort((a,b) => b.severity - a.severity);
+  }, [athletes, profiles]);
 
   // Lista de categorias com contagem
   const cats = useMemo(() => {
@@ -3260,6 +3314,19 @@ function ProfilesView({athletes,profiles}) {
     ),
     // Content
     el("div",{style:{flex:1,overflowY:"auto",padding:20}},
+      // Barra fina discreta com contagem — clicável abre modal
+      issues.length > 0 && el("div",{onClick:()=>setShowIssuesModal(true),style:{
+        display:"flex", alignItems:"center", gap:8,
+        padding:"7px 12px", marginBottom:14,
+        background:"#F1F5F9", border:"1px solid "+T.border, borderRadius:8,
+        fontSize:11, cursor:"pointer", transition:"background .1s"
+      }},
+        el("span",{style:{fontSize:12}}, "⚡"),
+        el("span",{style:{flex:1, color:T.sub}},
+          el("strong",{style:{color:T.text, fontWeight:800}}, issues.length),
+          " atletas × exercícios precisam de mais dados VBT"),
+        el("span",{style:{fontSize:10, fontWeight:700, color:T.accent, letterSpacing:".05em"}}, "VER →")
+      ),
       !sel&&el(Empty,{icon:"📊",title:"Selecione um atleta"}),
       sel&&el("div",null,
         el("div",{style:{display:"flex",alignItems:"center",gap:12,marginBottom:18}},
@@ -3305,6 +3372,52 @@ function ProfilesView({athletes,profiles}) {
             "⚠ R²="+(exProf.reg?exProf.reg.r2:"—")+" — perfil inconsistente. Realize protocolo com ≥5 cargas distintas."
           )
         ):el(Empty,{icon:"📉",title:"Sem dados de "+ex,sub:"Importe um CSV Output com histórico deste exercício."})
+      )
+    ),
+    // === Modal: lista completa de issues ===
+    showIssuesModal && el("div",{onClick:()=>setShowIssuesModal(false),style:{
+      position:"fixed", inset:0, background:"rgba(15,23,42,.5)", zIndex:200,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:20
+    }},
+      el("div",{onClick:e=>e.stopPropagation(),style:{
+        background:"#fff", borderRadius:12, width:"100%", maxWidth:720, maxHeight:"85vh",
+        display:"flex", flexDirection:"column", boxShadow:"0 30px 80px rgba(0,0,0,.3)"
+      }},
+        // Header
+        el("div",{style:{padding:"14px 18px",borderBottom:"1px solid "+T.border,
+          display:"flex",alignItems:"center",justifyContent:"space-between"}},
+          el("div",null,
+            el("div",{style:{fontSize:14,fontWeight:800,color:T.text}},"Próximos testes"),
+            el("div",{style:{fontSize:11,color:T.muted,marginTop:2}}, issues.length + " combinações · clique numa linha pra abrir o perfil")
+          ),
+          el("button",{onClick:()=>setShowIssuesModal(false),style:{
+            background:"none",border:"none",fontSize:22,cursor:"pointer",color:T.muted,padding:0,width:28,height:28
+          }},"×")
+        ),
+        // Lista compacta
+        el("div",{style:{flex:1,overflowY:"auto",padding:"4px 0"}},
+          ...issues.map((iss, idx) => {
+            const sevColors = { 4:"#DC2626", 3:"#EA580C", 2:"#D97706", 1:"#CA8A04" };
+            const cor = sevColors[iss.severity];
+            return el("div",{key:idx,onClick:()=>{setSel(iss.athlete);setEx(iss.exercise);setShowIssuesModal(false);},style:{
+              padding:"8px 18px", borderBottom:"1px solid "+T.border+"55",
+              display:"grid", gridTemplateColumns:"180px 90px 1fr 40px", gap:12, alignItems:"center",
+              cursor:"pointer", fontSize:11
+            }},
+              el("span",{style:{fontWeight:700,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                iss.athlete.nickname||iss.athlete.name),
+              el("span",{style:{fontWeight:700,color:T.muted,fontSize:10}},
+                iss.exercise==="Back Squat"?"SQUAT":iss.exercise==="Trap Bar Deadlift"?"TRAP BAR":"HIP THRUST"),
+              el("div",{style:{minWidth:0}},
+                el("div",{style:{color:cor,fontWeight:700,fontSize:10.5,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                  iss.motivo),
+                el("div",{style:{color:T.sub,fontSize:10.5,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                  "→ " + iss.acao)
+              ),
+              el("span",{style:{color:T.accent,fontSize:14,fontWeight:700,textAlign:"right"}},"›")
+            );
+          })
+        )
       )
     )
   );
