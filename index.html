@@ -439,7 +439,7 @@ async function mv2_saveDia(dateStr, flat, categoria) {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const EXERCISES = ["Back Squat", "Trap Bar Deadlift", "Hip Thrust"];
-const MVT_REF   = { "Back Squat":0.30, "Trap Bar Deadlift":0.50, "Hip Thrust":0.30 };
+const MVT_REF   = { "Back Squat":0.30, "Trap Bar Deadlift":0.30, "Hip Thrust":0.30 };
 const POSITIONS = ["Goleiro","Zagueiro","Lateral","Volante","Meia","Atacante"];
 const CATEGORIES= ["Profissional","Sub 20","Sub 17","Sub 16","Sub 15","Sub 14","Sub 13"];
 const GROUPS    = ["Goleiros","Defensores","Médios","Atacantes"];
@@ -463,7 +463,7 @@ const uid = () => Math.random().toString(36).slice(2,9);
 // ── Math ─────────────────────────────────────────────────────────────────────
 function linReg(xs, ys) {
   const n = xs.length;
-  if (n < 5 || new Set(xs).size < 3) return null;
+  if (n < 4 || new Set(xs).size < 3) return null;
   const mx = xs.reduce((a,b)=>a+b)/n, my = ys.reduce((a,b)=>a+b)/n;
   let num=0, den=0;
   xs.forEach((x,i)=>{ num+=(x-mx)*(ys[i]-my); den+=(x-mx)**2; });
@@ -562,9 +562,9 @@ function prescribe(prof, vel, exercise, bars, bodyWeight, position) {
   if (!e1rm) {
     const bw = (bodyWeight && bodyWeight > 30) ? bodyWeight : defaultBW(position);
     if (!bw) return null;
-    if (exercise === "Back Squat")          e1rm = bw * 1.2;
-    else if (exercise === "Trap Bar Deadlift") e1rm = bw * 1.5;
-    else                                     e1rm = bw * 1.3; // Hip Thrust
+    if (exercise === "Back Squat")          e1rm = bw * 1.6;
+    else if (exercise === "Trap Bar Deadlift") e1rm = bw * 2.0;
+    else                                     e1rm = bw * 2.0; // Hip Thrust
     method = "pc";
   }
 
