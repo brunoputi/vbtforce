@@ -838,6 +838,11 @@ function parseCSV(text, regNames) {
     // ISO: YYYY-MM-DD ou YYYY-MM-DDTHH:MM:SS
     const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (isoMatch) return isoMatch[0];
+    // YYYY/MM/DD (formato Output Sports: "2026/07/15 12:34:21")
+    const ymdMatch = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    if (ymdMatch) {
+      return ymdMatch[1] + '-' + ymdMatch[2].padStart(2,'0') + '-' + ymdMatch[3].padStart(2,'0');
+    }
     // DD/MM/YYYY ou DD-MM-YYYY (com hora opcional)
     const brMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
     if (brMatch) {
