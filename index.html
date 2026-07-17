@@ -4398,6 +4398,144 @@ function generateInsight(series, metric, mode) {
   return "Grupo estável no período — variação máxima entre " + worstDown.deltaPct.toFixed(1) + "% e " + bestUp.deltaPct.toFixed(1) + "%. Sem tendência marcante.";
 }
 
+// Tabela comparativa: linha por atleta, coluna por métrica com sparkline
+function ComparisonTable({ rows, exercise }) {
+  const el = React.createElement;
+  const [sortBy, setSortBy] = React.useState("e1rm");
+  const [sortDir, setSortDir] = React.useState("desc");
+
+  const sorted = React.useMemo(() => {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const av = a[sortBy] && a[sortBy].current != null ? a[sortBy].current : -Infinity;
+      const bv = b[sortBy] && b[sortBy].current != null ? b[sortBy].current : -Infinity;
+      return sortDir === "desc" ? bv - av : av - bv;
+    });
+    return copy;
+  }, [rows, sortBy, sortDir]);
+
+  const toggleSort = (key) => {
+    if (sortBy === key) setSortDir(sortDir === "desc" ? "asc" : "desc");
+    else { setSortBy(key); setSortDir("desc"); }
+  };
+
+  return el("div", { style: {
+    background: R.card, borderRadius: 8, border: "1px solid " + R.border, overflow: "hidden"
+  }},
+    // Header
+    el("div", { style: { padding: "16px 20px 12px", borderBottom: "1px solid " + R.border, display: "flex", justifyContent: "space-between", alignItems: "flex-end" } },
+      el("div", null,
+        el("h3", { style: { fontSize: 15, fontWeight: 600, color: R.text, margin: 0, letterSpacing: "-.01em" } }, "Tabela comparativa"),
+        el("div", { style: { fontSize: 11, color: R.textSub, marginTop: 3 } },
+          rows.length + " atleta" + (rows.length === 1 ? "" : "s") + " · " + exercise + " · ordenação por " + (METRICS.find(m => m.key === sortBy) || {}).label + " (" + (sortDir === "desc" ? "maior→menor" : "menor→maior") + ")")
+      )
+    ),
+    // Tabela
+    el("div", { style: { overflowX: "auto" } },
+      el("table", { style: {
+        width: "100%", borderCollapse: "collapse", fontSize: 12,
+        fontVariantNumeric: "tabular-nums"
+      }},
+        el("thead", null,
+          el("tr", { style: { background: "#FAFAFA" } },
+            el("th", { style: { padding: "10px 16px", textAlign: "left", fontSize: 10, fontWeight: 500, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase", borderBottom: "1px solid " + R.border, whiteSpace: "nowrap" } }, "Atleta"),
+            ...METRICS.map(m => el("th", { key: m.key, onClick: () => toggleSort(m.key), style: {
+              padding: "10px 12px", textAlign: "right", fontSize: 10, fontWeight: 500,
+              color: sortBy === m.key ? R.text : R.textMuted,
+              letterSpacing: ".06em", textTransform: "uppercase",
+              borderBottom: "1px solid " + R.border,
+              cursor: "pointer", whiteSpace: "nowrap"
+            }},
+              m.label.replace(/\s*\([^)]*\)/, ""),
+              sortBy === m.key && el("span", { style: { marginLeft: 4, fontSize: 9, color: R.text } }, sortDir === "desc" ? "↓" : "↑")
+            ))
+          )
+        ),
+        el("tbody", null,
+          ...sorted.map((row, i) => {
+            const ath = row.athlete;
+            return el("tr", { key: ath.id, style: { borderBottom: i === sorted.length - 1 ? "none" : "1px solid " + R.border } },
+              el("td", { style: { padding: "12px 16px", fontWeight: 500, color: R.text, whiteSpace: "nowrap" } },
+                el("div", null, ath.nickname || ath.name),
+                ath.position && el("div", { style: { fontSize: 10, color: R.textMuted, fontWeight: 400, marginTop: 2 } }, ath.position)
+              ),
+              ...METRICS.map(m => {
+                const cell = row[m.key];
+                if (!cell || cell.current == null) {
+                  return el("td", { key: m.key, style: { padding: "12px", textAlign: "right", color: R.textMuted } }, "—");
+                }
+                const isUp = cell.delta != null && cell.delta > 1;
+                const isDown = cell.delta != null && cell.delta < -1;
+                const deltaColor = isUp ? R.positive : isDown ? R.negative : R.neutral;
+                return el("td", { key: m.key, style: { padding: "10px 12px", textAlign: "right", verticalAlign: "middle" } },
+                  el("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 } },
+                    el("div", { style: { display: "flex", alignItems: "baseline", gap: 5, justifyContent: "flex-end" } },
+                      el("span", { style: { fontSize: 13, fontWeight: 600, color: R.text } },
+                        cell.current >= 100 ? cell.current.toFixed(0) : cell.current.toFixed(2)),
+                      cell.delta != null && el("span", { style: { fontSize: 10, fontWeight: 500, color: deltaColor } },
+                        (cell.delta > 0 ? "+" : "") + cell.delta.toFixed(1) + "%")
+                    ),
+                    cell.spark.length >= 2 && el("div", { style: { width: 80, height: 22 } },
+                      el(Sparkline, { points: cell.spark, height: 22, positive: !isDown, color: isDown ? R.negative : R.positive })
+                    )
+                  )
+                );
+              })
+            );
+          })
+        )
+      )
+    )
+  );
+}
+
+// Bloco de análise algorítmica: recomendações contextuais
+function AlgorithmicAnalysisBlock({ findings }) {
+  const el = React.createElement;
+  const [expandedOnly, setExpandedOnly] = React.useState(false);
+  const displayed = expandedOnly ? findings : findings.slice(0, 5);
+  return el("div", { style: {
+    background: R.card, borderRadius: 8, border: "1px solid " + R.border, overflow: "hidden"
+  }},
+    el("div", { style: { padding: "16px 20px 12px", borderBottom: "1px solid " + R.border, display: "flex", justifyContent: "space-between", alignItems: "flex-end" } },
+      el("div", null,
+        el("h3", { style: { fontSize: 15, fontWeight: 600, color: R.text, margin: 0, letterSpacing: "-.01em" } }, "Análise automática"),
+        el("div", { style: { fontSize: 11, color: R.textSub, marginTop: 3 } },
+          findings.length + " observaç" + (findings.length === 1 ? "ão" : "ões") + " baseadas em cruzamento de métricas + literatura VBT")
+      ),
+      findings.length > 5 && el("button", { onClick: () => setExpandedOnly(!expandedOnly), style: {
+        padding: "5px 10px", borderRadius: 5, border: "1px solid " + R.border, background: "#fff",
+        fontSize: 11, fontWeight: 500, color: R.textSub, cursor: "pointer"
+      }}, expandedOnly ? "Ver menos" : "Ver todas (" + findings.length + ")")
+    ),
+    el("div", null,
+      ...displayed.map((f, i) => {
+        const sevColor = f.severity === 2 ? R.negative : f.severity === 1 ? "#F59E0B" : R.positive;
+        const sevLabel = f.severity === 2 ? "Atenção" : f.severity === 1 ? "Ajuste" : "Positivo";
+        return el("div", { key: i, style: {
+          padding: "14px 20px",
+          borderBottom: i === displayed.length - 1 ? "none" : "1px solid " + R.border,
+          display: "flex", gap: 12
+        }},
+          el("div", { style: { flex: "0 0 4px", background: sevColor, borderRadius: 2 } }),
+          el("div", { style: { flex: 1 } },
+            el("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+              el("span", { style: {
+                fontSize: 9, fontWeight: 600, color: sevColor, letterSpacing: ".08em", textTransform: "uppercase",
+                padding: "2px 6px", background: sevColor + "15", borderRadius: 3
+              }}, sevLabel)
+            ),
+            el("div", { style: { fontSize: 12.5, color: R.text, lineHeight: 1.5, marginBottom: 4, fontWeight: 500 } }, f.finding),
+            el("div", { style: { fontSize: 11.5, color: R.textSub, lineHeight: 1.5 } },
+              el("span", { style: { fontWeight: 600, color: R.text } }, "→ "), f.recommendation)
+          )
+        );
+      })
+    )
+  );
+}
+
+
 function ReportsView({ athletes, snapshots }) {
   const el = React.createElement;
 
@@ -4412,6 +4550,7 @@ function ReportsView({ athletes, snapshots }) {
   const [customEnd, setCustomEnd] = useState("");
   const [editedInsights, setEditedInsights] = useState({});
   const [primaryMetric, setPrimaryMetric] = useState("e1rm");
+  const [perExMetric, setPerExMetric] = useState({}); // { "Back Squat": "e1rm" } — usado no modo multi
   const [editedSummary, setEditedSummary] = useState(null);
   // Benchmark: comparação de referência sobreposta ao gráfico
   const [benchmarkType, setBenchmarkType] = useState("none"); // none | team_avg | team_max | athlete
@@ -4594,7 +4733,111 @@ function ReportsView({ athletes, snapshots }) {
     return { teamAvg, teamAvgStr: teamAvg != null ? (teamAvg >= 100 ? teamAvg.toFixed(0) : teamAvg.toFixed(2)) : null };
   }, [exercise, dateRange, snapshots, activeAthletes]);
 
-  // Reset resumo automático quando filtros críticos mudam
+  // ── Tabela comparativa: uma linha por atleta com todas métricas + sparkline ──
+  const comparisonTableData = React.useMemo(() => {
+    if (selected.length === 0) return [];
+    const [dMin, dMax] = dateRange;
+    const relevantSnaps = snapshots.filter(s =>
+      s.session_date >= dMin && s.session_date <= dMax
+    );
+    let athletesToShow = [];
+    if (mode === "atleta") {
+      athletesToShow = selected.map(id => activeAthletes.find(a => a.id === id)).filter(Boolean);
+    } else if (mode === "posicao") {
+      selected.forEach(pos => {
+        activeAthletes.filter(a => a.position === pos).forEach(a => athletesToShow.push(a));
+      });
+    } else if (mode === "grupo") {
+      selected.forEach(cat => {
+        activeAthletes.filter(a => (a.categories || []).includes(cat)).forEach(a => athletesToShow.push(a));
+      });
+    }
+    // Dedup
+    const seen = new Set();
+    athletesToShow = athletesToShow.filter(a => { if (seen.has(a.id)) return false; seen.add(a.id); return true; });
+
+    const targetEx = exercises.length === 1 ? exercises[0] : exercise;
+    return athletesToShow.map(ath => {
+      const row = { athlete: ath };
+      METRICS.forEach(metric => {
+        const snaps = relevantSnaps.filter(s => s.athlete_id === ath.id && s.exercise === targetEx);
+        // Um ponto por dia = maior valor
+        const byDate = {};
+        snaps.forEach(s => {
+          const v = metric.getValue(s, ath);
+          if (v == null) return;
+          if (byDate[s.session_date] == null || v > byDate[s.session_date]) byDate[s.session_date] = v;
+        });
+        const points = Object.entries(byDate).sort((a,b) => a[0].localeCompare(b[0])).map(([_, v]) => v);
+        if (points.length === 0) {
+          row[metric.key] = { current: null, delta: null, spark: [] };
+        } else {
+          const current = points[points.length - 1];
+          const nStart = Math.min(3, Math.ceil(points.length / 2));
+          const start = points.slice(0, nStart).reduce((a,b) => a+b, 0) / nStart;
+          const end = points.slice(-nStart).reduce((a,b) => a+b, 0) / nStart;
+          const delta = start > 0 ? ((end - start) / start) * 100 : null;
+          row[metric.key] = { current, delta, spark: points };
+        }
+      });
+      return row;
+    });
+  }, [selected, mode, dateRange, snapshots, activeAthletes, exercises, exercise]);
+
+  // ── Análise algorítmica: cruza métricas e gera recomendações ──
+  const algorithmicAnalysis = React.useMemo(() => {
+    if (comparisonTableData.length === 0) return [];
+    const findings = [];
+    comparisonTableData.forEach(row => {
+      const ath = row.athlete;
+      const name = ath.nickname || ath.name;
+      const e1rm = row.e1rm; const rel = row.e1rm_rel;
+      const ppr = row.peak_power_rel; const pv = row.peak_velocity;
+      const load = row.max_load;
+
+      // Regra 1: força relativa cai + peso corporal sobe = ganho de massa sem transferência
+      if (rel && rel.delta != null && rel.delta < -3 && e1rm && e1rm.delta != null && e1rm.delta >= -1) {
+        findings.push({
+          athlete: ath, severity: 2,
+          finding: name + ": força relativa caiu " + Math.abs(rel.delta).toFixed(1) + "% enquanto e1RM absoluto se manteve.",
+          recommendation: "Provável ganho de massa sem transferência neural. Sugerir bloco de 3 semanas com cargas 85-95% + VLoss 10-15%."
+        });
+      }
+      // Regra 2: e1RM sobe + velocidade cai = hipertrofia sem manutenção de velocidade
+      if (e1rm && e1rm.delta != null && e1rm.delta > 3 && pv && pv.delta != null && pv.delta < -3) {
+        findings.push({
+          athlete: ath, severity: 1,
+          finding: name + ": e1RM subiu " + e1rm.delta.toFixed(1) + "% mas velocidade pico caiu " + Math.abs(pv.delta).toFixed(1) + "%.",
+          recommendation: "Padrão de hipertrofia sem manutenção neural. Adicionar dia de força-velocidade com cargas 40-60% × 3-5 séries × 4-6 reps."
+        });
+      }
+      // Regra 3: potência relativa em queda >5%
+      if (ppr && ppr.delta != null && ppr.delta < -5) {
+        findings.push({
+          athlete: ath, severity: 2,
+          finding: name + ": potência pico relativa caiu " + Math.abs(ppr.delta).toFixed(1) + "% no período.",
+          recommendation: "Métrica mais correlacionada com sprint/salto em futebol. Priorizar cargas ótimas de potência (30-60% e1RM) + saltos."
+        });
+      }
+      // Regra 4: tudo evolui simultaneamente >5% = fase produtiva
+      if (rel && rel.delta > 5 && ppr && ppr.delta > 3 && e1rm && e1rm.delta > 3) {
+        findings.push({
+          athlete: ath, severity: 0,
+          finding: name + ": evolução simultânea em força (+" + e1rm.delta.toFixed(1) + "%), relativa (+" + rel.delta.toFixed(1) + "%) e potência (+" + ppr.delta.toFixed(1) + "%).",
+          recommendation: "Fase produtiva. Manter estímulo atual, monitorar sinais de fadiga."
+        });
+      }
+      // Regra 5: e1RM estagnado + carga max estagnada por 4+ semanas
+      if (e1rm && e1rm.spark.length >= 6 && Math.abs(e1rm.delta || 0) < 2 && load && Math.abs(load.delta || 0) < 2) {
+        findings.push({
+          athlete: ath, severity: 1,
+          finding: name + ": e1RM e carga máxima estagnados no período (variação < 2%).",
+          recommendation: "Plateau. Testar bloco de acumulação com volume 20-30% maior + carga 70-80% ou dessensibilização (deload 1 semana + retomada)."
+        });
+      }
+    });
+    return findings.sort((a,b) => b.severity - a.severity);
+  }, [comparisonTableData]);
   React.useEffect(() => { setEditedSummary(null); }, [mode, selected, exercise, period, primaryMetric]);
 
   // ── Alertas: atletas em queda >5% no período ──
@@ -4912,7 +5155,8 @@ function ReportsView({ athletes, snapshots }) {
                 }
                 return { metric: m, series, currentVal, deltaPct, sparklineData };
               });
-              const primary = metricsData.find(md => md.metric.key === primaryMetric) || metricsData[0];
+              const currentPrimaryKey = isCompact ? (perExMetric[ex] || primaryMetric) : primaryMetric;
+              const primary = metricsData.find(md => md.metric.key === currentPrimaryKey) || metricsData[0];
               const secondaries = metricsData.filter(md => md.metric.key !== primary.metric.key);
 
               return el("div", { key: ex, style: { display: "flex", flexDirection: "column", gap: isCompact ? 14 : 20 } },
@@ -4924,17 +5168,20 @@ function ReportsView({ athletes, snapshots }) {
                 // ═══ KPI CARDS ═══
                 el("div", { style: { display: "grid", gridTemplateColumns: isCompact ? "repeat(5, 1fr)" : "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 } },
                   ...metricsData.map(({ metric, currentVal, deltaPct, sparklineData }) => {
-                    const isActive = !isCompact && metric.key === primaryMetric;
+                    const isActive = metric.key === currentPrimaryKey;
                     const hasDelta = deltaPct != null;
                     const isUp = hasDelta && deltaPct > 1;
                     const isDown = hasDelta && deltaPct < -1;
                     const deltaColor = isUp ? R.positive : isDown ? R.negative : R.neutral;
                     const ctx = computeContext(metric);
-                    return el("div", { key: metric.key, onClick: () => !isCompact && setPrimaryMetric(metric.key), style: {
+                    return el("div", { key: metric.key, onClick: () => {
+                      if (isCompact) setPerExMetric({ ...perExMetric, [ex]: metric.key });
+                      else setPrimaryMetric(metric.key);
+                    }, style: {
                       background: isActive ? R.cardActive : R.card,
                       border: "1px solid " + (isActive ? R.cardActive : R.border),
                       borderRadius: 8, padding: isCompact ? "12px 12px 10px" : "16px 16px 12px",
-                      cursor: isCompact ? "default" : "pointer",
+                      cursor: "pointer",
                       transition: "all .15s ease",
                       minHeight: isCompact ? 100 : 148,
                       display: "flex", flexDirection: "column", justifyContent: "space-between"
@@ -5036,7 +5283,11 @@ function ReportsView({ athletes, snapshots }) {
                     })
                   )
                 ),
-                renderExerciseDashboard(activeEx, false)
+                renderExerciseDashboard(activeEx, false),
+                // ═══ TABELA COMPARATIVA ═══
+                comparisonTableData.length > 1 && el(ComparisonTable, { rows: comparisonTableData, exercise: activeEx }),
+                // ═══ ANÁLISE ALGORÍTMICA ═══
+                algorithmicAnalysis.length > 0 && el(AlgorithmicAnalysisBlock, { findings: algorithmicAnalysis })
               );
             }
 
@@ -5055,7 +5306,10 @@ function ReportsView({ athletes, snapshots }) {
                     "Comparação lado a lado de " + exercises.join(", ") + " no período selecionado.")
                 )
               ),
-              ...exercises.map(ex => renderExerciseDashboard(ex, true))
+              ...exercises.map(ex => renderExerciseDashboard(ex, true)),
+              // Tabela e análise também no modo multi (usam exercise ativo do dropdown)
+              comparisonTableData.length > 1 && el(ComparisonTable, { rows: comparisonTableData, exercise: exercise }),
+              algorithmicAnalysis.length > 0 && el(AlgorithmicAnalysisBlock, { findings: algorithmicAnalysis })
             );
           })()
       )
