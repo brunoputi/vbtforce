@@ -654,7 +654,20 @@ function buildProfile(pts, ex) {
   const maxMpvArr=ys.filter((_,i)=>xs[i]===maxLoad);
   const maxMpv=+(maxMpvArr.reduce((a,b)=>a+b,0)/maxMpvArr.length).toFixed(3);
   const mvt=MVT_REF[ex]; let e1rm=null;
+  // Método A: regressão (precisa 3+ cargas distintas)
   if (reg&&reg.slope<0) { const l=(mvt-reg.intercept)/reg.slope; if(l>20&&l<400) e1rm=Math.round(l/5)*5; }
+  // Método B: generalizada — funciona com 1+ carga se souber velocidade dela
+  // e1RM = maxLoad / (pct1RM(maxMpv) / 100)
+  if (e1rm == null && maxLoad > 0 && maxMpv > 0) {
+    const pctAtMax = pct1RM(maxMpv, ex) / 100;
+    if (pctAtMax > 0.3 && pctAtMax <= 1) {
+      const est = maxLoad / pctAtMax;
+      // Sanity: e1RM não pode ser mais que 1.75× a maior carga observada (regularização)
+      if (est > 20 && est < 400 && est <= maxLoad * 1.75) {
+        e1rm = Math.round(est / 5) * 5;
+      }
+    }
+  }
   return { reg, reliable:!!(reg&&reg.r2>=0.35), e1rm, maxLoad, maxMpv, nReps:pts.length, pts, updatedAt:new Date().toISOString() };
 }
 
