@@ -4550,7 +4550,8 @@ function ReportsView({ athletes, snapshots }) {
   const [customEnd, setCustomEnd] = useState("");
   const [editedInsights, setEditedInsights] = useState({});
   const [primaryMetric, setPrimaryMetric] = useState("e1rm");
-  const [perExMetric, setPerExMetric] = useState({}); // { "Back Squat": "e1rm" } — usado no modo multi
+  const [perExMetric, setPerExMetric] = useState({});
+  const [innerTab, setInnerTab] = useState("overview"); // overview | evolucao | comparativo
   const [editedSummary, setEditedSummary] = useState(null);
   // Benchmark: comparação de referência sobreposta ao gráfico
   const [benchmarkType, setBenchmarkType] = useState("none"); // none | team_avg | team_max | athlete
@@ -5130,6 +5131,27 @@ function ReportsView({ athletes, snapshots }) {
         )
       )
     ),
+    // ═══ TABS INTERNAS ═══
+    selected.length > 0 && el("div", { style: {
+      display: "flex", gap: 2, padding: "12px 24px 0",
+      background: "#fff", borderBottom: "1px solid " + R.border, flexShrink: 0
+    }},
+      ...[
+        ["overview", "Overview", "Visão geral com KPIs"],
+        ["evolucao", "Evolução", "Gráfico detalhado da métrica"],
+        ["comparativo", "Comparativo", "Tabela + análise por atleta"]
+      ].map(([id, label, subtitle]) =>
+        el("button", { key: id, onClick: () => setInnerTab(id), style: {
+          padding: "10px 16px", border: "none", background: "transparent",
+          borderBottom: "2px solid " + (innerTab === id ? R.text : "transparent"),
+          color: innerTab === id ? R.text : R.textSub,
+          fontSize: 13, fontWeight: innerTab === id ? 600 : 500,
+          cursor: "pointer", letterSpacing: "-.005em",
+          marginBottom: -1, transition: "all .15s"
+        }}, label)
+      )
+    ),
+
     // ═══ ÁREA PRINCIPAL ═══
     el("div", { style: { flex: 1, overflowY: "auto" } },
       el("div", { "data-reports-content": true, style: { padding: "24px", background: R.bg } },
@@ -5137,180 +5159,168 @@ function ReportsView({ athletes, snapshots }) {
         ? el("div", { style: { textAlign: "center", padding: "80px 20px", color: R.textMuted, fontSize: 13, fontWeight: 500 } },
             "Selecione " + (mode === "atleta" ? "atletas" : mode === "grupo" ? "categorias" : "posições") + " para gerar o dashboard.")
         : (() => {
-            // Função que renderiza um dashboard de UM exercício
-            const renderExerciseDashboard = (ex, isCompact) => {
-              const metricsData = METRICS.map(m => {
-                const series = buildSeries(m, ex);
-                let currentVal = null, deltaPct = null, sparklineData = [];
-                const firstSeries = series[0];
-                if (firstSeries && firstSeries.points.length > 0) {
-                  const pts = firstSeries.points.filter(p => p.value != null).sort((a,b) => new Date(a.date) - new Date(b.date));
-                  if (pts.length > 0) {
-                    const nEnd = Math.min(3, Math.ceil(pts.length / 2));
-                    currentVal = pts.slice(-nEnd).reduce((s,p) => s + p.value, 0) / nEnd;
-                    const firstVal = pts.slice(0, nEnd).reduce((s,p) => s + p.value, 0) / nEnd;
-                    if (firstVal > 0) deltaPct = ((currentVal - firstVal) / firstVal) * 100;
-                    sparklineData = pts.map(p => p.value);
-                  }
+            const targetEx = exercises.length === 1 ? exercises[0] : exercise;
+            const metricsData = METRICS.map(m => {
+              const series = buildSeries(m, targetEx);
+              let currentVal = null, deltaPct = null, sparklineData = [];
+              const firstSeries = series[0];
+              if (firstSeries && firstSeries.points.length > 0) {
+                const pts = firstSeries.points.filter(p => p.value != null).sort((a,b) => new Date(a.date) - new Date(b.date));
+                if (pts.length > 0) {
+                  const nEnd = Math.min(3, Math.ceil(pts.length / 2));
+                  currentVal = pts.slice(-nEnd).reduce((s,p) => s + p.value, 0) / nEnd;
+                  const firstVal = pts.slice(0, nEnd).reduce((s,p) => s + p.value, 0) / nEnd;
+                  if (firstVal > 0) deltaPct = ((currentVal - firstVal) / firstVal) * 100;
+                  sparklineData = pts.map(p => p.value);
                 }
-                return { metric: m, series, currentVal, deltaPct, sparklineData };
-              });
-              const currentPrimaryKey = isCompact ? (perExMetric[ex] || primaryMetric) : primaryMetric;
-              const primary = metricsData.find(md => md.metric.key === currentPrimaryKey) || metricsData[0];
-              const secondaries = metricsData.filter(md => md.metric.key !== primary.metric.key);
+              }
+              return { metric: m, series, currentVal, deltaPct, sparklineData };
+            });
+            const primary = metricsData.find(md => md.metric.key === primaryMetric) || metricsData[0];
 
-              return el("div", { key: ex, style: { display: "flex", flexDirection: "column", gap: isCompact ? 14 : 20 } },
-                // Título do exercício (só no modo compact)
-                isCompact && el("div", { style: { display: "flex", alignItems: "baseline", gap: 10, paddingBottom: 6, borderBottom: "2px solid " + R.text } },
-                  el("h2", { style: { fontSize: 15, fontWeight: 600, color: R.text, margin: 0, letterSpacing: "-.01em" } }, ex),
-                  el("span", { style: { fontSize: 10, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase", fontWeight: 500 } }, "métricas do período")
-                ),
-                // ═══ KPI CARDS ═══
-                el("div", { style: { display: "grid", gridTemplateColumns: isCompact ? "repeat(5, 1fr)" : "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 } },
-                  ...metricsData.map(({ metric, currentVal, deltaPct, sparklineData }) => {
-                    const isActive = metric.key === currentPrimaryKey;
-                    const hasDelta = deltaPct != null;
-                    const isUp = hasDelta && deltaPct > 1;
-                    const isDown = hasDelta && deltaPct < -1;
-                    const deltaColor = isUp ? R.positive : isDown ? R.negative : R.neutral;
-                    const ctx = computeContext(metric);
-                    return el("div", { key: metric.key, onClick: () => {
-                      if (isCompact) setPerExMetric({ ...perExMetric, [ex]: metric.key });
-                      else setPrimaryMetric(metric.key);
-                    }, style: {
-                      background: isActive ? R.cardActive : R.card,
-                      border: "1px solid " + (isActive ? R.cardActive : R.border),
-                      borderRadius: 8, padding: isCompact ? "12px 12px 10px" : "16px 16px 12px",
-                      cursor: "pointer",
-                      transition: "all .15s ease",
-                      minHeight: isCompact ? 100 : 148,
-                      display: "flex", flexDirection: "column", justifyContent: "space-between"
-                    }},
-                      el("div", null,
-                        el("div", { style: { fontSize: 9, fontWeight: 500, letterSpacing: ".04em", textTransform: "uppercase", color: isActive ? "#A3A3A3" : R.textMuted, marginBottom: 6 } },
-                          metric.label.replace(/\s*\([^)]*\)/, "")),
-                        el("div", { style: { display: "flex", alignItems: "baseline", gap: 4, marginBottom: 3 } },
-                          el("span", { style: {
-                            fontSize: isCompact ? 20 : 26, fontWeight: 600, color: isActive ? "#fff" : R.text,
-                            letterSpacing: "-.02em", lineHeight: 1,
-                            fontVariantNumeric: "tabular-nums"
-                          }},
-                            currentVal != null ? (currentVal >= 100 ? currentVal.toFixed(0) : currentVal.toFixed(2)) : "—"),
-                          el("span", { style: { fontSize: 10, fontWeight: 400, color: isActive ? "#737373" : R.textMuted } }, metric.unit)
-                        ),
-                        hasDelta && el("div", { style: { display: "flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 500, color: deltaColor, fontVariantNumeric: "tabular-nums" } },
-                          isUp ? Icon.ArrowUp(9, deltaColor) : isDown ? Icon.ArrowDown(9, deltaColor) : Icon.Minus(9, deltaColor),
-                          el("span", null, (deltaPct > 0 ? "+" : "") + deltaPct.toFixed(1) + "%")
-                        ),
-                        !isCompact && ctx.teamAvg != null && currentVal != null && el("div", { style: { fontSize: 10, color: isActive ? "#A3A3A3" : R.textMuted, fontWeight: 400, marginTop: 3, fontVariantNumeric: "tabular-nums" } },
-                          "vs média " + ctx.teamAvgStr + " ",
-                          el("span", { style: { color: currentVal > ctx.teamAvg ? R.positive : currentVal < ctx.teamAvg ? R.negative : R.neutral, fontWeight: 500 } },
-                            "(" + (currentVal > ctx.teamAvg ? "+" : "") + ((currentVal - ctx.teamAvg) / ctx.teamAvg * 100).toFixed(1) + "%)")
-                        )
-                      ),
-                      sparklineData.length >= 2 && el("div", { style: { marginTop: 6, marginLeft: -4, marginRight: -4 } },
-                        el(Sparkline, { points: sparklineData, height: isCompact ? 22 : 28, positive: !isDown, color: isActive ? "#525252" : (isDown ? R.negative : R.positive) })
-                      )
-                    );
-                  })
-                ),
-
-                // ═══ GRÁFICO PRINCIPAL DO EXERCÍCIO ═══
+            // ─── OVERVIEW ───
+            if (innerTab === "overview") {
+              return el("div", { style: { display: "flex", flexDirection: "column", gap: 24, maxWidth: 1200, margin: "0 auto" } },
+                // Resumo executivo
                 el("div", { style: {
-                  background: R.card, borderRadius: 8, padding: isCompact ? "16px 18px" : "22px 24px",
-                  border: "1px solid " + R.border
-                }},
-                  el("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14 } },
-                    el("div", null,
-                      el("div", { style: { fontSize: isCompact ? 13 : 16, fontWeight: 600, color: R.text, letterSpacing: "-.01em", marginBottom: 2 } }, primary.metric.label),
-                      el("div", { style: { fontSize: 11, color: R.textSub, fontWeight: 400 } }, primary.metric.subtitle)
-                    ),
-                    el("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 10.5, color: R.textMuted, fontWeight: 500 } },
-                      el("span", null, ex),
-                      el("span", { style: { color: R.borderHover } }, "|"),
-                      el("span", { style: { fontVariantNumeric: "tabular-nums" } }, dateRange[0].split("-").reverse().join("/") + " → " + dateRange[1].split("-").reverse().join("/"))
-                    )
-                  ),
-                  (() => {
-                    const bench = buildBenchmark(primary.metric);
-                    const seriesWithBench = bench ? [...primary.series, bench] : primary.series;
-                    return el(LineChart, { series: seriesWithBench, height: isCompact ? 220 : 300, unit: primary.metric.unit, showArea: true, showAnnotations: primary.series.length === 1 && !bench });
-                  })(),
-                  // Legenda
-                  el("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid " + R.border, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20, flexWrap: "wrap" } },
-                    el("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, fontSize: 11 } },
-                      ...primary.series.map((s, si) => {
-                        const color = REPORT_COLORS[si % REPORT_COLORS.length];
-                        return el("span", { key: si, style: { display: "flex", alignItems: "center", gap: 5, color: R.textSub, fontWeight: 500 } },
-                          el("span", { style: { width: 8, height: 8, background: color, borderRadius: "50%" } }),
-                          s.name
-                        );
-                      })
-                    ),
-                    !isCompact && el("div", { style: { fontSize: 10.5, color: R.textMuted, lineHeight: 1.5, fontWeight: 400, maxWidth: 380, textAlign: "right" } },
-                      primary.metric.description)
-                  )
-                )
-              );
-            };
-
-            // Layout single vs multi
-            const isSingle = exercises.length === 1;
-            const activeEx = isSingle ? exercises[0] : null;
-
-            if (isSingle) {
-              // Layout completo pra 1 exercício
-              return el("div", { style: { display: "flex", flexDirection: "column", gap: 24 } },
-                // RESUMO EXECUTIVO
-                el("div", { style: {
-                  background: R.text, borderRadius: 8, padding: "18px 22px",
+                  background: R.text, borderRadius: 10, padding: "22px 26px",
                   display: "flex", alignItems: "flex-start", gap: 14
                 }},
-                  el("div", { style: { flex: "0 0 3px", height: 32, background: "#fff", borderRadius: 2, marginTop: 2 } }),
+                  el("div", { style: { flex: "0 0 3px", height: 40, background: "#fff", borderRadius: 2, marginTop: 2 } }),
                   el("div", { style: { flex: 1 } },
-                    el("div", { style: { fontSize: 10, fontWeight: 500, color: "#A3A3A3", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 6 } },
-                      "Resumo Executivo"),
+                    el("div", { style: { fontSize: 10, fontWeight: 500, color: "#A3A3A3", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 8 } },
+                      "Resumo Executivo · " + targetEx),
                     el("textarea", {
                       value: executiveSummary,
                       onChange: e => setEditedSummary(e.target.value),
                       placeholder: "Análise executiva do período",
                       style: {
                         width: "100%", background: "transparent", border: "none",
-                        color: "#fff", fontSize: 14, fontWeight: 400, lineHeight: 1.5,
+                        color: "#fff", fontSize: 15, fontWeight: 400, lineHeight: 1.5,
                         fontFamily: "inherit", resize: "none", outline: "none",
                         minHeight: 24, padding: 0
                       }
                     })
                   )
                 ),
-                renderExerciseDashboard(activeEx, false),
-                // ═══ TABELA COMPARATIVA ═══
-                comparisonTableData.length > 1 && el(ComparisonTable, { rows: comparisonTableData, exercise: activeEx }),
-                // ═══ ANÁLISE ALGORÍTMICA ═══
-                algorithmicAnalysis.length > 0 && el(AlgorithmicAnalysisBlock, { findings: algorithmicAnalysis })
+                // KPI Cards (grandes, com espaço)
+                el("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12 } },
+                  ...metricsData.map(({ metric, currentVal, deltaPct, sparklineData }) => {
+                    const hasDelta = deltaPct != null;
+                    const isUp = hasDelta && deltaPct > 1;
+                    const isDown = hasDelta && deltaPct < -1;
+                    const deltaColor = isUp ? R.positive : isDown ? R.negative : R.neutral;
+                    const ctx = computeContext(metric);
+                    return el("div", { key: metric.key, onClick: () => { setPrimaryMetric(metric.key); setInnerTab("evolucao"); }, style: {
+                      background: R.card, border: "1px solid " + R.border,
+                      borderRadius: 10, padding: "18px 20px", cursor: "pointer",
+                      transition: "all .15s ease", minHeight: 170,
+                      display: "flex", flexDirection: "column", justifyContent: "space-between"
+                    }},
+                      el("div", null,
+                        el("div", { style: { fontSize: 10, fontWeight: 500, letterSpacing: ".04em", textTransform: "uppercase", color: R.textMuted, marginBottom: 10 } },
+                          metric.label.replace(/\s*\([^)]*\)/, "")),
+                        el("div", { style: { display: "flex", alignItems: "baseline", gap: 5, marginBottom: 5 } },
+                          el("span", { style: {
+                            fontSize: 30, fontWeight: 600, color: R.text,
+                            letterSpacing: "-.02em", lineHeight: 1,
+                            fontVariantNumeric: "tabular-nums"
+                          }},
+                            currentVal != null ? (currentVal >= 100 ? currentVal.toFixed(0) : currentVal.toFixed(2)) : "—"),
+                          el("span", { style: { fontSize: 12, fontWeight: 400, color: R.textMuted } }, metric.unit)
+                        ),
+                        hasDelta && el("div", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, color: deltaColor, fontVariantNumeric: "tabular-nums" } },
+                          isUp ? Icon.ArrowUp(10, deltaColor) : isDown ? Icon.ArrowDown(10, deltaColor) : Icon.Minus(10, deltaColor),
+                          el("span", null, (deltaPct > 0 ? "+" : "") + deltaPct.toFixed(1) + "% período")
+                        ),
+                        ctx.teamAvg != null && currentVal != null && el("div", { style: { fontSize: 10.5, color: R.textMuted, fontWeight: 400, marginTop: 4, fontVariantNumeric: "tabular-nums" } },
+                          "vs média time " + ctx.teamAvgStr)
+                      ),
+                      sparklineData.length >= 2 && el("div", { style: { marginTop: 8, marginLeft: -4, marginRight: -4 } },
+                        el(Sparkline, { points: sparklineData, height: 34, positive: !isDown, color: isDown ? R.negative : R.positive })
+                      )
+                    );
+                  })
+                ),
+                // Dica ao clicar
+                el("div", { style: { textAlign: "center", fontSize: 11, color: R.textMuted, fontStyle: "italic", padding: "8px 0" } },
+                  "Clique num KPI para ver a evolução detalhada")
               );
             }
 
-            // Layout multi: seções empilhadas
-            return el("div", { style: { display: "flex", flexDirection: "column", gap: 32 } },
-              // Resumo executivo mais compacto
-              el("div", { style: {
-                background: R.text, borderRadius: 8, padding: "16px 20px",
-                display: "flex", alignItems: "flex-start", gap: 12
-              }},
-                el("div", { style: { flex: "0 0 3px", height: 28, background: "#fff", borderRadius: 2, marginTop: 2 } }),
-                el("div", { style: { flex: 1 } },
-                  el("div", { style: { fontSize: 10, fontWeight: 500, color: "#A3A3A3", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 4 } },
-                    "Overview · " + exercises.length + " exercícios"),
-                  el("div", { style: { color: "#fff", fontSize: 13, fontWeight: 400, lineHeight: 1.5 } },
-                    "Comparação lado a lado de " + exercises.join(", ") + " no período selecionado.")
-                )
-              ),
-              ...exercises.map(ex => renderExerciseDashboard(ex, true)),
-              // Tabela e análise também no modo multi (usam exercise ativo do dropdown)
-              comparisonTableData.length > 1 && el(ComparisonTable, { rows: comparisonTableData, exercise: exercise }),
-              algorithmicAnalysis.length > 0 && el(AlgorithmicAnalysisBlock, { findings: algorithmicAnalysis })
-            );
+            // ─── EVOLUÇÃO ───
+            if (innerTab === "evolucao") {
+              return el("div", { style: { display: "flex", flexDirection: "column", gap: 20, maxWidth: 1200, margin: "0 auto" } },
+                // Seletor de métrica compacto
+                el("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+                  ...METRICS.map(m => el("button", { key: m.key, onClick: () => setPrimaryMetric(m.key), style: {
+                    padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 500, cursor: "pointer",
+                    border: "1px solid " + (m.key === primaryMetric ? R.text : R.border),
+                    background: m.key === primaryMetric ? R.text : "#fff",
+                    color: m.key === primaryMetric ? "#fff" : R.textSub
+                  }}, m.label.replace(/\s*\([^)]*\)/, "")))
+                ),
+                // Gráfico grande
+                el("div", { style: {
+                  background: R.card, borderRadius: 10, padding: "24px 28px",
+                  border: "1px solid " + R.border
+                }},
+                  el("div", { style: { marginBottom: 16 } },
+                    el("div", { style: { fontSize: 18, fontWeight: 600, color: R.text, letterSpacing: "-.01em", marginBottom: 3 } }, primary.metric.label),
+                    el("div", { style: { fontSize: 12, color: R.textSub, marginBottom: 10 } }, primary.metric.subtitle),
+                    el("div", { style: { fontSize: 11.5, color: R.textSub, lineHeight: 1.55, padding: "10px 14px", background: "#FAFAFA", borderRadius: 6, borderLeft: "3px solid " + R.text } },
+                      primary.metric.description)
+                  ),
+                  (() => {
+                    const bench = buildBenchmark(primary.metric);
+                    const seriesWithBench = bench ? [...primary.series, bench] : primary.series;
+                    return el(LineChart, { series: seriesWithBench, height: 380, unit: primary.metric.unit, showArea: true, showAnnotations: primary.series.length === 1 && !bench });
+                  })(),
+                  // Legenda
+                  el("div", { style: { marginTop: 14, paddingTop: 12, borderTop: "1px solid " + R.border, display: "flex", flexWrap: "wrap", gap: 14, fontSize: 11 } },
+                    ...primary.series.map((s, si) => {
+                      const color = REPORT_COLORS[si % REPORT_COLORS.length];
+                      return el("span", { key: si, style: { display: "flex", alignItems: "center", gap: 6, color: R.textSub, fontWeight: 500 } },
+                        el("span", { style: { width: 10, height: 10, background: color, borderRadius: "50%" } }),
+                        s.name
+                      );
+                    })
+                  )
+                ),
+                // Insight editável
+                (() => {
+                  const autoInsight = generateInsight(primary.series, primary.metric, mode);
+                  const insight = editedInsights[primary.metric.key] != null ? editedInsights[primary.metric.key] : autoInsight;
+                  return el("div", { style: { background: R.card, borderRadius: 10, padding: "18px 22px", border: "1px solid " + R.border } },
+                    el("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 8 } },
+                      Icon.Sparkle(11, R.textMuted),
+                      el("span", { style: { fontSize: 10.5, fontWeight: 500, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase" } }, "Análise")
+                    ),
+                    el("textarea", {
+                      value: insight,
+                      onChange: e => setEditedInsights({ ...editedInsights, [primary.metric.key]: e.target.value }),
+                      style: {
+                        width: "100%", padding: "10px 12px", border: "1px solid " + R.border, borderRadius: 6,
+                        fontSize: 13, fontFamily: "inherit", color: R.text, background: "#FAFAFA",
+                        resize: "vertical", minHeight: 60, lineHeight: 1.55, fontWeight: 400,
+                        outline: "none"
+                      }
+                    })
+                  );
+                })()
+              );
+            }
+
+            // ─── COMPARATIVO ───
+            if (innerTab === "comparativo") {
+              return el("div", { style: { display: "flex", flexDirection: "column", gap: 20, maxWidth: 1400, margin: "0 auto" } },
+                comparisonTableData.length === 0
+                  ? el("div", { style: { textAlign: "center", padding: "60px 20px", color: R.textMuted, fontSize: 13 } },
+                      "Sem dados para comparar. Selecione mais atletas ou mude o período.")
+                  : el(ComparisonTable, { rows: comparisonTableData, exercise: targetEx }),
+                algorithmicAnalysis.length > 0 && el(AlgorithmicAnalysisBlock, { findings: algorithmicAnalysis })
+              );
+            }
           })()
       )
     ),
@@ -5631,8 +5641,9 @@ function App() {
   const loadSnapshots = React.useCallback(async () => {
     try {
       const rows = await api.get("vbt_session_snapshots",
-        "club_id=eq." + CLUB_ID + "&order=session_date.asc&limit=5000");
+        "club_id=eq." + CLUB_ID + "&order=session_date.desc&limit=20000");
       setSnapshots(rows || []);
+      console.log("Snapshots carregados:", (rows || []).length, "dias únicos:", new Set((rows||[]).map(r=>r.session_date)).size);
     } catch(e) { console.error("Erro ao carregar snapshots:", e); }
   }, []);
 
