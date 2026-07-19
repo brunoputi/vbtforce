@@ -5267,25 +5267,24 @@ function ReportsView({ athletes, snapshots }) {
           const sevColor = f.severity === 2 ? [239,68,68] : f.severity === 1 ? [245,158,11] : [16,185,129];
           const sevLabel = f.severity === 2 ? "ATENÇÃO" : f.severity === 1 ? "AJUSTE" : "POSITIVO";
           // Barra lateral colorida
-          pdf.setFillColor(...sevColor);
+          pdf.setFillColor(sevColor[0], sevColor[1], sevColor[2]);
           pdf.rect(margin, y, 1.5, 18, "F");
-          // Badge
-          pdf.setFillColor(sevColor[0], sevColor[1], sevColor[2], "F");
+          // Badge de severidade (só texto colorido, sem fundo)
           pdf.setFont("helvetica", "bold");
           pdf.setFontSize(7);
-          pdf.setTextColor(...sevColor);
+          pdf.setTextColor(sevColor[0], sevColor[1], sevColor[2]);
           pdf.text(sevLabel, margin + 4, y + 4);
           // Finding
           pdf.setFont("helvetica", "bold");
           pdf.setFontSize(9.5);
           pdf.setTextColor(10, 10, 11);
-          const findLines = pdf.splitTextToSize(f.finding, contentW - 6);
+          const findLines = pdf.splitTextToSize(String(f.finding || ""), contentW - 6);
           pdf.text(findLines, margin + 4, y + 9);
           // Recomendação
           pdf.setFont("helvetica", "normal");
           pdf.setFontSize(9);
           pdf.setTextColor(80, 80, 80);
-          const recLines = pdf.splitTextToSize("→ " + f.recommendation, contentW - 6);
+          const recLines = pdf.splitTextToSize("→ " + String(f.recommendation || ""), contentW - 6);
           pdf.text(recLines, margin + 4, y + 9 + findLines.length * 4);
           y += 9 + findLines.length * 4 + recLines.length * 4 + 8;
         });
