@@ -5129,19 +5129,20 @@ function ReportsView({ athletes, snapshots }) {
       addFooter(2, 5, "Sumário Executivo");
 
       // ═══ PÁGINA 3: GRÁFICO PRINCIPAL ═══
+      const primaryForPdf = metricsData.find(md => md.metric.key === primaryMetric) || metricsData[0];
       pdf.addPage();
-      addPageHeader("Evolução — " + primary.metric.label);
+      addPageHeader("Evolução — " + primaryForPdf.metric.label);
       y = 28;
 
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(16);
       pdf.setTextColor(10, 10, 11);
-      pdf.text(primary.metric.label, margin, y);
+      pdf.text(primaryForPdf.metric.label, margin, y);
       y += 6;
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(9);
       pdf.setTextColor(115, 115, 115);
-      const descLines = pdf.splitTextToSize(primary.metric.description, contentW);
+      const descLines = pdf.splitTextToSize(primaryForPdf.metric.description, contentW);
       pdf.text(descLines, margin, y);
       y += descLines.length * 4 + 6;
 
