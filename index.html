@@ -4572,200 +4572,283 @@ function AlgorithmicAnalysisBlock({ findings }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // PDF LAYOUT — Renderiza 4 páginas HTML premium pra captura via html2canvas
 // ═══════════════════════════════════════════════════════════════════════════
-function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, chartImageDataUrl, groupedFindings }) {
+// ═══════════════════════════════════════════════════════════════════════════
+// PDF LAYOUT — Renderiza N páginas HTML premium (dinâmico por métricas × exercícios)
+// ═══════════════════════════════════════════════════════════════════════════
+function PdfChartMini({ series, unit, showArea }) {
+  const el = React.createElement;
+  const RC = window.Recharts;
+  if (!RC || !series || series.length === 0) return el("div", { style: { padding: 60, textAlign: "center", color: "#A3A3A3", fontSize: 12, background: "#FAFAFA" } }, "Sem dados");
+  const allDates = new Set();
+  series.forEach(s => s.points.forEach(p => allDates.add(p.date)));
+  if (allDates.size === 0) return el("div", { style: { padding: 60, textAlign: "center", color: "#A3A3A3", fontSize: 12, background: "#FAFAFA" } }, "Sem dados no período");
+  const sortedDates = [...allDates].sort();
+  const dataset = sortedDates.map(date => {
+    const row = { date };
+    series.forEach((s, i) => {
+      const pt = s.points.find(p => p.date === date);
+      if (pt && pt.value != null) row["s" + i] = pt.value;
+    });
+    return row;
+  });
+  const REPORT_COLORS_PDF = ["#0A0A0B","#EF4444","#3B82F6","#F59E0B","#8B5CF6","#14B8A6"];
+  const xTickFormatter = (d) => {
+    const dt = new Date(d);
+    return dt.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" }).replace(".", "");
+  };
+
+  return el(RC.ResponsiveContainer, { width: "100%", height: 220 },
+    el(RC.AreaChart, { data: dataset, margin: { top: 10, right: 15, left: 5, bottom: 5 } },
+      el("defs", null,
+        ...series.map((s, i) => {
+          const color = s.isBenchmark ? "#737373" : REPORT_COLORS_PDF[i % REPORT_COLORS_PDF.length];
+          return el("linearGradient", { key: i, id: "pdfGrad" + i + "_" + Math.random().toString(36).slice(2,7), x1: 0, y1: 0, x2: 0, y2: 1 },
+            el("stop", { offset: "0%", stopColor: color, stopOpacity: 0.18 }),
+            el("stop", { offset: "100%", stopColor: color, stopOpacity: 0 })
+          );
+        })
+      ),
+      el(RC.CartesianGrid, { strokeDasharray: "0", stroke: "#F0F0F0", vertical: false }),
+      el(RC.XAxis, {
+        dataKey: "date", tickFormatter: xTickFormatter,
+        tick: { fontSize: 9, fill: "#737373", fontWeight: 500 },
+        axisLine: false, tickLine: false, tickMargin: 6,
+        interval: "preserveStartEnd", minTickGap: 50
+      }),
+      el(RC.YAxis, {
+        tick: { fontSize: 9, fill: "#737373", fontWeight: 500 },
+        axisLine: false, tickLine: false, tickMargin: 4, width: 36,
+        domain: ["dataMin - 5%", "dataMax + 5%"]
+      }),
+      ...series.map((s, i) => {
+        const color = s.isBenchmark ? "#737373" : REPORT_COLORS_PDF[i % REPORT_COLORS_PDF.length];
+        return el(RC.Area, {
+          key: i, type: "monotone", dataKey: "s" + i, name: s.name,
+          stroke: color, strokeWidth: s.isBenchmark ? 1.5 : 2,
+          strokeDasharray: s.isBenchmark ? "4 4" : "0",
+          fill: s.isBenchmark ? "transparent" : "rgba(10,10,11,0.05)",
+          dot: s.isBenchmark ? false : { r: 2.5, fill: color, strokeWidth: 0 },
+          isAnimationActive: false, connectNulls: true
+        });
+      })
+    )
+  );
+}
+
+function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupedFindings, chartsPerMetric }) {
   const el = React.createElement;
 
-  // Estilos base — A4 em pixels a 72dpi = 794 × 1123
   const pageStyle = {
     width: "794px", height: "1123px",
     background: "#fff", position: "relative",
     fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
     color: "#0A0A0B", overflow: "hidden",
-    boxSizing: "border-box"
+    boxSizing: "border-box",
+    pageBreakAfter: "always"
   };
-  const pageContent = { padding: "68px 72px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" };
+  const pageContent = { padding: "56px 64px 72px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" };
 
   const pageHeader = (section) => el("div", { style: {
     display: "flex", justifyContent: "space-between", alignItems: "center",
-    paddingBottom: 14, borderBottom: "1px solid #E5E5E5", marginBottom: 32,
-    fontSize: 11
+    paddingBottom: 12, borderBottom: "1px solid #E5E5E5", marginBottom: 28,
+    fontSize: 10.5
   }},
     el("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
-      el("div", { style: { width: 24, height: 24, background: "#0A0A0B", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700, letterSpacing: ".05em" } }, "CAP"),
+      el("div", { style: { width: 22, height: 22, background: "#0A0A0B", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, fontWeight: 700, letterSpacing: ".05em" } }, "CAP"),
       el("span", { style: { fontWeight: 600, letterSpacing: "-.01em" } }, "Relatório de Performance")
     ),
     el("span", { style: { color: "#737373", fontWeight: 500 } }, section)
   );
 
-  const pageFooter = (num) => el("div", { style: {
-    position: "absolute", left: 72, right: 72, bottom: 40,
+  const pageFooter = (num, total) => el("div", { style: {
+    position: "absolute", left: 64, right: 64, bottom: 32,
     display: "flex", justifyContent: "space-between", alignItems: "center",
-    paddingTop: 14, borderTop: "1px solid #E5E5E5",
+    paddingTop: 12, borderTop: "1px solid #E5E5E5",
     fontSize: 10, color: "#A3A3A3", fontWeight: 500
   }},
     el("span", null, "vbtforce.vercel.app"),
-    el("span", null, num + " de 4")
+    el("span", null, num + " de " + total)
   );
 
-  return el("div", null,
-    // ═══ PÁGINA 1: CAPA ═══
-    el("div", { className: "pdf-page", style: pageStyle },
-      el("div", { style: pageContent },
-        // Header discreto no topo
-        el("div", { style: { display: "flex", alignItems: "center", gap: 10, fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } },
-          el("div", { style: { width: 20, height: 20, background: "#0A0A0B", borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 9, fontWeight: 700 } }, "CAP"),
-          el("span", null, "Club Athletico Paranaense · Performance")
+  // Monta lista de páginas dinamicamente
+  const pages = [];
+
+  // PÁGINA 1 — CAPA
+  pages.push(el("div", { className: "pdf-page", style: pageStyle },
+    el("div", { style: pageContent },
+      el("div", { style: { display: "flex", alignItems: "center", gap: 10, fontSize: 10.5, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } },
+        el("div", { style: { width: 20, height: 20, background: "#0A0A0B", borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 9, fontWeight: 700 } }, "CAP"),
+        el("span", null, "Club Athletico Paranaense · Performance")
+      ),
+      el("div", { style: { flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", marginTop: -30 } },
+        el("div", { style: { fontSize: 12, color: "#737373", letterSpacing: ".2em", textTransform: "uppercase", fontWeight: 600, marginBottom: 22 } }, "Relatório"),
+        el("h1", { style: { fontSize: 64, fontWeight: 700, letterSpacing: "-.03em", lineHeight: 0.95, margin: 0, color: "#0A0A0B" } },
+          "Análise de", el("br"), "Performance"),
+        el("div", { style: { fontSize: 14, color: "#525252", marginTop: 22, lineHeight: 1.5, maxWidth: 460, fontWeight: 400 } },
+          "Análise longitudinal de força, potência e velocidade baseada em VBT sobre a base histórica de sessões.")
+      ),
+      el("div", { style: { borderTop: "1px solid #E5E5E5", paddingTop: 22, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22 } },
+        el("div", null,
+          el("div", { style: { fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 5 } }, "Exercícios"),
+          el("div", { style: { fontSize: 12.5, fontWeight: 500, color: "#0A0A0B" } }, meta.exercisesLabel)
         ),
-        // Título principal
-        el("div", { style: { flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", marginTop: -40 } },
-          el("div", { style: { fontSize: 13, color: "#737373", letterSpacing: ".2em", textTransform: "uppercase", fontWeight: 600, marginBottom: 24 } }, "Relatório"),
-          el("h1", { style: { fontSize: 68, fontWeight: 700, letterSpacing: "-.03em", lineHeight: 0.95, margin: 0, color: "#0A0A0B" } },
-            "Análise de", el("br"), "Performance"),
-          el("div", { style: { fontSize: 15, color: "#525252", marginTop: 24, lineHeight: 1.5, maxWidth: 480, fontWeight: 400 } },
-            "Análise longitudinal de força, potência e velocidade baseada em VBT (Velocity-Based Training) sobre a base histórica de sessões.")
+        el("div", null,
+          el("div", { style: { fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 5 } }, "Escopo"),
+          el("div", { style: { fontSize: 12.5, fontWeight: 500, color: "#0A0A0B" } }, meta.scopeLabel)
         ),
-        // Metadados no rodapé da capa
-        el("div", { style: { borderTop: "1px solid #E5E5E5", paddingTop: 24, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 } },
-          el("div", null,
-            el("div", { style: { fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 6 } }, "Exercícios"),
-            el("div", { style: { fontSize: 13, fontWeight: 500, color: "#0A0A0B" } }, meta.exercisesLabel)
-          ),
-          el("div", null,
-            el("div", { style: { fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 6 } }, "Escopo"),
-            el("div", { style: { fontSize: 13, fontWeight: 500, color: "#0A0A0B" } }, meta.scopeLabel)
-          ),
-          el("div", null,
-            el("div", { style: { fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 6 } }, "Período analisado"),
-            el("div", { style: { fontSize: 13, fontWeight: 500, color: "#0A0A0B" } }, meta.periodStr)
-          ),
-          el("div", null,
-            el("div", { style: { fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 6 } }, "Emitido em"),
-            el("div", { style: { fontSize: 13, fontWeight: 500, color: "#0A0A0B" } }, meta.today)
-          )
+        el("div", null,
+          el("div", { style: { fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 5 } }, "Período"),
+          el("div", { style: { fontSize: 12.5, fontWeight: 500, color: "#0A0A0B" } }, meta.periodStr)
+        ),
+        el("div", null,
+          el("div", { style: { fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 5 } }, "Emitido em"),
+          el("div", { style: { fontSize: 12.5, fontWeight: 500, color: "#0A0A0B" } }, meta.today)
         )
       )
-    ),
+    )
+  ));
 
-    // ═══ PÁGINA 2: SUMÁRIO EXECUTIVO + KPIs ═══
-    el("div", { className: "pdf-page", style: pageStyle },
-      el("div", { style: pageContent },
-        pageHeader("Sumário Executivo"),
-        // Título
-        el("h2", { style: { fontSize: 26, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 8, color: "#0A0A0B" } }, "Sumário Executivo"),
-        el("div", { style: { fontSize: 12, color: "#737373", marginBottom: 32, fontWeight: 500 } }, meta.exercisesLabel + " · " + meta.periodStr),
-        // Parágrafo destacado
-        el("div", { style: { padding: "24px 28px", background: "#0A0A0B", color: "#fff", borderRadius: 10, marginBottom: 36 } },
-          el("div", { style: { fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 8 } }, "Principal observação"),
-          el("div", { style: { fontSize: 17, fontWeight: 400, lineHeight: 1.5, color: "#fff" } }, executiveSummary || "Sem dados suficientes para análise conclusiva.")
-        ),
-        // Indicadores em linha
-        el("div", { style: { fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 14 } }, "Indicadores no período"),
-        el("div", { style: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 } },
-          ...metricsData.map(md => {
-            const hasDelta = md.deltaPct != null;
-            const isUp = hasDelta && md.deltaPct > 1;
-            const isDown = hasDelta && md.deltaPct < -1;
-            const deltaColor = isUp ? "#10B981" : isDown ? "#EF4444" : "#737373";
-            return el("div", { key: md.metric.key, style: { padding: "18px 16px", borderTop: "2px solid #0A0A0B" } },
-              el("div", { style: { fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 10, minHeight: 22, lineHeight: 1.2 } },
-                md.metric.label.replace(/\s*\([^)]*\)/, "")),
-              el("div", { style: { display: "flex", alignItems: "baseline", gap: 4, marginBottom: 6 } },
-                el("span", { style: { fontSize: 24, fontWeight: 600, letterSpacing: "-.02em", color: "#0A0A0B", lineHeight: 1 } },
-                  md.currentVal != null ? (md.currentVal >= 100 ? md.currentVal.toFixed(0) : md.currentVal.toFixed(2)) : "—"),
-                el("span", { style: { fontSize: 10, fontWeight: 400, color: "#A3A3A3" } }, md.metric.unit)
-              ),
-              hasDelta && el("div", { style: { fontSize: 11, fontWeight: 500, color: deltaColor } },
-                (md.deltaPct > 0 ? "↑ +" : md.deltaPct < 0 ? "↓ " : "→ ") + Math.abs(md.deltaPct).toFixed(1) + "%")
-            );
-          })
-        ),
-        // Nota metodológica
-        el("div", { style: { marginTop: "auto", paddingTop: 32, fontSize: 10, color: "#A3A3A3", lineHeight: 1.6, fontWeight: 400 } },
-          "Valores calculados a partir da média dos últimos ~3 pontos vs. média dos ~3 primeiros no período. Comparativo de tendência, não de sessão isolada.")
+  // PÁGINA 2 — SUMÁRIO + KPIs
+  pages.push(el("div", { className: "pdf-page", style: pageStyle },
+    el("div", { style: pageContent },
+      pageHeader("Sumário Executivo"),
+      el("h2", { style: { fontSize: 24, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 6, color: "#0A0A0B" } }, "Sumário Executivo"),
+      el("div", { style: { fontSize: 11.5, color: "#737373", marginBottom: 26, fontWeight: 500 } }, meta.exercisesLabel + " · " + meta.periodStr),
+      el("div", { style: { padding: "22px 26px", background: "#0A0A0B", color: "#fff", borderRadius: 10, marginBottom: 30 } },
+        el("div", { style: { fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 8 } }, "Principal observação"),
+        el("div", { style: { fontSize: 16, fontWeight: 400, lineHeight: 1.5, color: "#fff" } }, executiveSummary || "Sem dados suficientes para análise conclusiva.")
       ),
-      pageFooter(2)
-    ),
-
-    // ═══ PÁGINA 3: EVOLUÇÃO (GRÁFICO) ═══
-    el("div", { className: "pdf-page", style: pageStyle },
-      el("div", { style: pageContent },
-        pageHeader("Evolução"),
-        el("h2", { style: { fontSize: 26, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 8, color: "#0A0A0B" } }, meta.primaryLabel),
-        el("div", { style: { fontSize: 12, color: "#737373", marginBottom: 24, fontWeight: 500 } }, meta.primarySubtitle),
-        // Descrição
-        el("div", { style: { fontSize: 12, color: "#525252", lineHeight: 1.6, padding: "14px 18px", background: "#FAFAFA", borderLeft: "3px solid #0A0A0B", marginBottom: 32 } },
-          meta.primaryDescription),
-        // Gráfico (imagem capturada)
-        chartImageDataUrl && el("img", { src: chartImageDataUrl, style: { width: "100%", height: "auto", maxHeight: 420, objectFit: "contain" } }),
-        !chartImageDataUrl && el("div", { style: { padding: 60, textAlign: "center", color: "#A3A3A3", fontSize: 12 } }, "Sem gráfico disponível — abra a aba Evolução antes de exportar.")
+      el("div", { style: { fontSize: 9.5, letterSpacing: ".1em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 12 } }, "Indicadores do período"),
+      el("div", { style: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 } },
+        ...metricsData.map(md => {
+          const hasDelta = md.deltaPct != null;
+          const isUp = hasDelta && md.deltaPct > 1;
+          const isDown = hasDelta && md.deltaPct < -1;
+          const deltaColor = isUp ? "#10B981" : isDown ? "#EF4444" : "#737373";
+          return el("div", { key: md.metric.key, style: { padding: "16px 14px", borderTop: "2px solid #0A0A0B" } },
+            el("div", { style: { fontSize: 8.5, letterSpacing: ".08em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 10, minHeight: 22, lineHeight: 1.2 } },
+              md.metric.label.replace(/\s*\([^)]*\)/, "")),
+            el("div", { style: { display: "flex", alignItems: "baseline", gap: 4, marginBottom: 6 } },
+              el("span", { style: { fontSize: 22, fontWeight: 600, letterSpacing: "-.02em", color: "#0A0A0B", lineHeight: 1 } },
+                md.currentVal != null ? (md.currentVal >= 100 ? md.currentVal.toFixed(0) : md.currentVal.toFixed(2)) : "—"),
+              el("span", { style: { fontSize: 9.5, fontWeight: 400, color: "#A3A3A3" } }, md.metric.unit)
+            ),
+            hasDelta && el("div", { style: { fontSize: 10.5, fontWeight: 500, color: deltaColor } },
+              (md.deltaPct > 0 ? "↑ +" : md.deltaPct < 0 ? "↓ " : "→ ") + Math.abs(md.deltaPct).toFixed(1) + "%")
+          );
+        })
       ),
-      pageFooter(3)
-    ),
+      el("div", { style: { marginTop: "auto", paddingTop: 26, fontSize: 9.5, color: "#A3A3A3", lineHeight: 1.6, fontWeight: 400 } },
+        "Valores calculados a partir da média dos últimos ~3 pontos vs. média dos ~3 primeiros no período. Comparativo de tendência, não de sessão isolada.")
+    )
+  ));
 
-    // ═══ PÁGINA 4: TABELA + ANÁLISE AGRUPADA ═══
-    el("div", { className: "pdf-page", style: pageStyle },
+  // PÁGINAS DE GRÁFICOS — 1 por métrica (com N gráficos empilhados dentro se multi-exercício)
+  chartsPerMetric.forEach(mp => {
+    const numCharts = mp.chartsByEx.length;
+    // Se 1-2 gráficos, cabe 1 página. Se 3, cabe apertado mas cabe.
+    pages.push(el("div", { className: "pdf-page", style: pageStyle },
       el("div", { style: pageContent },
-        pageHeader("Comparativo & Análise"),
-        el("h2", { style: { fontSize: 22, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 8, color: "#0A0A0B" } }, "Comparativo por atleta"),
-        el("div", { style: { fontSize: 11, color: "#737373", marginBottom: 18, fontWeight: 500 } }, meta.targetEx + " · " + meta.periodStr),
-        // Tabela compacta
-        el("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 10.5, marginBottom: 32 } },
-          el("thead", null,
-            el("tr", { style: { borderBottom: "2px solid #0A0A0B" } },
-              el("th", { style: { textAlign: "left", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Atleta"),
-              el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "e1RM (kg)"),
-              el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Força Rel."),
-              el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Pot. W/kg"),
-              el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Vel. Pico"),
-              el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Carga Máx")
-            )
-          ),
-          el("tbody", null,
-            ...comparisonRows.slice(0, 20).map((row, i) => {
-              const cell = (key) => {
-                const c = row[key];
-                if (!c || c.current == null) return el("td", { style: { padding: "6px", textAlign: "right", color: "#A3A3A3" } }, "—");
-                const isUp = c.delta != null && c.delta > 1;
-                const isDown = c.delta != null && c.delta < -1;
-                const deltaColor = isUp ? "#10B981" : isDown ? "#EF4444" : "#737373";
-                return el("td", { style: { padding: "6px", textAlign: "right", fontVariantNumeric: "tabular-nums" } },
-                  el("div", { style: { display: "flex", justifyContent: "flex-end", alignItems: "baseline", gap: 6 } },
-                    el("span", { style: { fontWeight: 500, color: "#0A0A0B" } },
-                      c.current >= 100 ? c.current.toFixed(0) : c.current.toFixed(2)),
-                    c.delta != null && el("span", { style: { fontSize: 9, color: deltaColor, fontWeight: 500 } },
-                      (c.delta > 0 ? "+" : "") + c.delta.toFixed(0) + "%")
-                  )
-                );
-              };
-              return el("tr", { key: i, style: { borderBottom: "1px solid #F5F5F5" } },
-                el("td", { style: { padding: "6px", fontWeight: 500 } }, row.athlete.nickname || row.athlete.name),
-                cell("e1rm"), cell("e1rm_rel"), cell("peak_power_rel"), cell("peak_velocity"), cell("max_load")
-              );
-            })
+        pageHeader("Evolução — " + mp.label),
+        el("h2", { style: { fontSize: 22, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 6, color: "#0A0A0B" } }, mp.label),
+        el("div", { style: { fontSize: 11.5, color: "#737373", marginBottom: 18, fontWeight: 500 } }, mp.subtitle),
+        el("div", { style: { fontSize: 11, color: "#525252", lineHeight: 1.6, padding: "12px 16px", background: "#FAFAFA", borderLeft: "3px solid #0A0A0B", marginBottom: 24 } },
+          mp.description),
+        el("div", { style: { display: "flex", flexDirection: "column", gap: 20, flex: 1 } },
+          ...mp.chartsByEx.map((c, ci) => el("div", { key: ci },
+            numCharts > 1 && el("div", { style: { fontSize: 11, fontWeight: 600, color: "#0A0A0B", marginBottom: 8, letterSpacing: "-.01em", display: "flex", alignItems: "center", gap: 8 } },
+              el("span", { style: { padding: "2px 8px", background: "#0A0A0B", color: "#fff", borderRadius: 3, fontSize: 9, letterSpacing: ".06em", textTransform: "uppercase" } }, c.exercise)
+            ),
+            el(PdfChartMini, { series: c.series, unit: mp.unit })
+          ))
+        )
+      )
+    ));
+  });
+
+  // PÁGINA — COMPARATIVO
+  pages.push(el("div", { className: "pdf-page", style: pageStyle },
+    el("div", { style: pageContent },
+      pageHeader("Comparativo por atleta"),
+      el("h2", { style: { fontSize: 22, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 6, color: "#0A0A0B" } }, "Comparativo por atleta"),
+      el("div", { style: { fontSize: 11, color: "#737373", marginBottom: 18, fontWeight: 500 } }, meta.targetEx + " · " + meta.periodStr),
+      el("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 10.5 } },
+        el("thead", null,
+          el("tr", { style: { borderBottom: "2px solid #0A0A0B" } },
+            el("th", { style: { textAlign: "left", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Atleta"),
+            el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "e1RM (kg)"),
+            el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Força Rel."),
+            el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Pot. W/kg"),
+            el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Vel. Pico"),
+            el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Carga Máx")
           )
         ),
-        // Análise agrupada
-        el("h3", { style: { fontSize: 15, fontWeight: 700, letterSpacing: "-.01em", margin: 0, marginBottom: 4, color: "#0A0A0B" } }, "Análise automática"),
-        el("div", { style: { fontSize: 10, color: "#737373", marginBottom: 16, fontWeight: 500 } }, "Achados agrupados por padrão"),
-        el("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
-          ...groupedFindings.map((g, i) => {
-            const sevColor = g.severity === 2 ? "#EF4444" : g.severity === 1 ? "#F59E0B" : "#10B981";
-            const sevLabel = g.severity === 2 ? "Atenção" : g.severity === 1 ? "Ajuste" : "Positivo";
-            return el("div", { key: i, style: { display: "flex", gap: 12, padding: "10px 0" } },
-              el("div", { style: { flex: "0 0 3px", background: sevColor, borderRadius: 2 } }),
-              el("div", { style: { flex: 1 } },
-                el("div", { style: { fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: sevColor, fontWeight: 700, marginBottom: 4 } }, sevLabel),
-                el("div", { style: { fontSize: 12, fontWeight: 600, color: "#0A0A0B", marginBottom: 4, lineHeight: 1.4 } }, g.title),
-                el("div", { style: { fontSize: 11, color: "#525252", lineHeight: 1.55, marginBottom: 3 } }, g.athletes),
-                el("div", { style: { fontSize: 11, color: "#737373", lineHeight: 1.55 } }, "→ " + g.recommendation)
-              )
+        el("tbody", null,
+          ...comparisonRows.slice(0, 26).map((row, i) => {
+            const cell = (key) => {
+              const c = row[key];
+              if (!c || c.current == null) return el("td", { style: { padding: "6px", textAlign: "right", color: "#A3A3A3" } }, "—");
+              const isUp = c.delta != null && c.delta > 1;
+              const isDown = c.delta != null && c.delta < -1;
+              const deltaColor = isUp ? "#10B981" : isDown ? "#EF4444" : "#737373";
+              return el("td", { style: { padding: "6px", textAlign: "right", fontVariantNumeric: "tabular-nums" } },
+                el("div", { style: { display: "flex", justifyContent: "flex-end", alignItems: "baseline", gap: 6 } },
+                  el("span", { style: { fontWeight: 500, color: "#0A0A0B" } },
+                    c.current >= 100 ? c.current.toFixed(0) : c.current.toFixed(2)),
+                  c.delta != null && el("span", { style: { fontSize: 9, color: deltaColor, fontWeight: 500 } },
+                    (c.delta > 0 ? "+" : "") + c.delta.toFixed(0) + "%")
+                )
+              );
+            };
+            return el("tr", { key: i, style: { borderBottom: "1px solid #F5F5F5" } },
+              el("td", { style: { padding: "6px", fontWeight: 500 } }, row.athlete.nickname || row.athlete.name),
+              cell("e1rm"), cell("e1rm_rel"), cell("peak_power_rel"), cell("peak_velocity"), cell("max_load")
             );
           })
         )
-      ),
-      pageFooter(4)
+      )
     )
-  );
+  ));
+
+  // PÁGINA — ANÁLISE AGRUPADA
+  pages.push(el("div", { className: "pdf-page", style: pageStyle },
+    el("div", { style: pageContent },
+      pageHeader("Análise automática"),
+      el("h2", { style: { fontSize: 22, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 6, color: "#0A0A0B" } }, "Análise automática"),
+      el("div", { style: { fontSize: 11, color: "#737373", marginBottom: 24, fontWeight: 500 } }, "Achados agrupados por padrão · baseados em cruzamento de métricas + literatura VBT"),
+      el("div", { style: { display: "flex", flexDirection: "column", gap: 16 } },
+        ...groupedFindings.map((g, i) => {
+          const sevColor = g.severity === 2 ? "#EF4444" : g.severity === 1 ? "#F59E0B" : "#10B981";
+          const sevLabel = g.severity === 2 ? "Atenção" : g.severity === 1 ? "Ajuste" : "Positivo";
+          return el("div", { key: i, style: { display: "flex", gap: 14, padding: "12px 0" } },
+            el("div", { style: { flex: "0 0 3px", background: sevColor, borderRadius: 2 } }),
+            el("div", { style: { flex: 1 } },
+              el("div", { style: { fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: sevColor, fontWeight: 700, marginBottom: 5 } }, sevLabel),
+              el("div", { style: { fontSize: 13, fontWeight: 600, color: "#0A0A0B", marginBottom: 5, lineHeight: 1.4 } }, g.title),
+              el("div", { style: { fontSize: 11, color: "#525252", lineHeight: 1.55, marginBottom: 5 } }, g.athletes),
+              el("div", { style: { fontSize: 11, color: "#737373", lineHeight: 1.55 } }, "→ " + g.recommendation)
+            )
+          );
+        })
+      )
+    )
+  ));
+
+  const total = pages.length;
+  return el("div", null, ...pages.map((p, i) => el("div", { key: i },
+    p,
+    // Adiciona footer com contagem correta ao lado
+    i > 0 && el("div", { style: {
+      position: "absolute", left: 64, right: 64, bottom: 32,
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      paddingTop: 12, borderTop: "1px solid #E5E5E5",
+      fontSize: 10, color: "#A3A3A3", fontWeight: 500,
+      marginTop: -60
+    }},
+      el("span", null, "vbtforce.vercel.app"),
+      el("span", null, (i + 1) + " de " + total)
+    )
+  )));
 }
 
 function ReportsView({ athletes, snapshots }) {
@@ -5151,6 +5234,7 @@ function ReportsView({ athletes, snapshots }) {
   // Exportar PDF do dashboard atual
   // ═══ PDF ESTRUTURADO — Relatório multi-página para comissão técnica ═══
   // ═══ PDF ESTRUTURADO — HTML→canvas→PDF ═══
+  // ═══ PDF ESTRUTURADO — HTML→canvas→PDF (dinâmico) ═══
   const exportPDF = async () => {
     if (!window.jspdf || !window.html2canvas) { alert("Biblioteca de PDF não carregada"); return; }
     try {
@@ -5160,9 +5244,9 @@ function ReportsView({ athletes, snapshots }) {
         : (selected.length === 1 ? "Posição: " + selected[0] : selected.length + " posições");
       const periodStr = dateRange[0].split("-").reverse().join("/") + " → " + dateRange[1].split("-").reverse().join("/");
       const today = new Date().toLocaleDateString("pt-BR");
-      const exercisesLabel = exercises.length === 1 ? targetEx : exercises.join(" · ");
+      const exercisesLabel = exercises.join(" · ");
 
-      // Recomputa metricsData e comparisonRows
+      // Metrics data pra KPIs no sumário (usa primeiro exercício)
       const metricsData = METRICS.map(m => {
         const series = buildSeries(m, targetEx);
         let currentVal = null, deltaPct = null;
@@ -5178,14 +5262,29 @@ function ReportsView({ athletes, snapshots }) {
         }
         return { metric: m, currentVal, deltaPct };
       });
-      const primaryForPdf = metricsData.find(md => md.metric.key === primaryMetric) || metricsData[0];
+
+      // chartsPerMetric: 1 entrada por métrica, cada uma com N gráficos (1 por exercício selecionado)
+      const chartsPerMetric = METRICS.map(m => ({
+        key: m.key,
+        label: m.label,
+        subtitle: m.subtitle,
+        description: m.description,
+        unit: m.unit,
+        chartsByEx: exercises.map(ex => ({
+          exercise: ex,
+          series: (() => {
+            const s = buildSeries(m, ex);
+            const bench = buildBenchmark(m, ex);
+            return bench ? [...s, bench] : s;
+          })()
+        }))
+      }));
+
       const comparisonRows = buildComparisonForEx(targetEx);
 
-      // ═══ AGRUPAMENTO DE ANÁLISE ═══
-      // Agrupa achados por tipo em vez de repetir linha por atleta
+      // Análise agrupada por padrão
       const groupedFindings = (() => {
         const grouped = [];
-        // Buckets por padrão
         const powerDrop = [], strengthDrop = [], velocityDrop = [], productive = [], plateau = [];
         comparisonRows.forEach(row => {
           const name = row.athlete.nickname || row.athlete.name;
@@ -5197,102 +5296,57 @@ function ReportsView({ athletes, snapshots }) {
           if (rel && rel.delta > 5 && ppr && ppr.delta > 3 && e1 && e1.delta > 3) productive.push({ name, delta: rel.delta });
           if (e1 && e1.spark && e1.spark.length >= 6 && Math.abs(e1.delta || 0) < 2 && load && Math.abs(load.delta || 0) < 2) plateau.push({ name });
         });
-
         if (powerDrop.length > 0) {
           const sorted = powerDrop.sort((a,b) => a.delta - b.delta);
           const names = sorted.slice(0, 5).map(x => x.name + " (" + x.delta.toFixed(0) + "%)").join(", ");
           const more = sorted.length > 5 ? " e mais " + (sorted.length - 5) + " atleta(s)" : "";
-          grouped.push({
-            severity: 2,
-            title: "Queda de potência relativa em " + sorted.length + " atleta" + (sorted.length === 1 ? "" : "s"),
-            athletes: names + more,
-            recommendation: "Potência é a métrica mais correlacionada com sprint/salto em futebol. Priorizar cargas ótimas de potência (30-60% e1RM) + trabalho de saltos e arremessos."
-          });
+          grouped.push({ severity: 2, title: "Queda de potência relativa em " + sorted.length + " atleta" + (sorted.length === 1 ? "" : "s"), athletes: names + more,
+            recommendation: "Potência é a métrica mais correlacionada com sprint/salto em futebol. Priorizar cargas ótimas de potência (30-60% e1RM) + saltos e arremessos." });
         }
         if (strengthDrop.length > 0) {
           const sorted = strengthDrop.sort((a,b) => a.delta - b.delta);
           const names = sorted.slice(0, 5).map(x => x.name + " (" + x.delta.toFixed(0) + "%)").join(", ");
           const more = sorted.length > 5 ? " e mais " + (sorted.length - 5) + " atleta(s)" : "";
-          grouped.push({
-            severity: 2,
-            title: "Perda de força relativa com e1RM estável em " + sorted.length + " atleta" + (sorted.length === 1 ? "" : "s"),
-            athletes: names + more,
-            recommendation: "Provável ganho de massa sem transferência neural. Sugerir bloco de 3 semanas com cargas 85-95% + VLoss 10-15%."
-          });
+          grouped.push({ severity: 2, title: "Perda de força relativa com e1RM estável em " + sorted.length + " atleta" + (sorted.length === 1 ? "" : "s"), athletes: names + more,
+            recommendation: "Provável ganho de massa sem transferência neural. Bloco de 3 semanas com cargas 85-95% + VLoss 10-15%." });
         }
         if (velocityDrop.length > 0) {
           const names = velocityDrop.slice(0, 5).map(x => x.name).join(", ");
           const more = velocityDrop.length > 5 ? " e mais " + (velocityDrop.length - 5) : "";
-          grouped.push({
-            severity: 1,
-            title: "Hipertrofia sem manutenção de velocidade em " + velocityDrop.length + " atleta" + (velocityDrop.length === 1 ? "" : "s"),
-            athletes: names + more,
-            recommendation: "Adicionar dia de força-velocidade com cargas 40-60% × 3-5 séries × 4-6 reps para preservar produção de força em alta velocidade."
-          });
+          grouped.push({ severity: 1, title: "Hipertrofia sem manutenção de velocidade em " + velocityDrop.length + " atleta" + (velocityDrop.length === 1 ? "" : "s"), athletes: names + more,
+            recommendation: "Adicionar dia de força-velocidade com cargas 40-60% × 3-5 séries × 4-6 reps." });
         }
         if (plateau.length > 0) {
           const names = plateau.slice(0, 5).map(x => x.name).join(", ");
           const more = plateau.length > 5 ? " e mais " + (plateau.length - 5) : "";
-          grouped.push({
-            severity: 1,
-            title: "Plateau em força/carga em " + plateau.length + " atleta" + (plateau.length === 1 ? "" : "s"),
-            athletes: names + more,
-            recommendation: "Testar bloco de acumulação (volume +20-30% × carga 70-80%) ou deload de 1 semana seguido de retomada."
-          });
+          grouped.push({ severity: 1, title: "Plateau em força/carga em " + plateau.length + " atleta" + (plateau.length === 1 ? "" : "s"), athletes: names + more,
+            recommendation: "Bloco de acumulação (volume +20-30% × carga 70-80%) ou deload de 1 semana." });
         }
         if (productive.length > 0) {
           const names = productive.slice(0, 5).map(x => x.name + " (+" + x.delta.toFixed(0) + "%)").join(", ");
           const more = productive.length > 5 ? " e mais " + (productive.length - 5) : "";
-          grouped.push({
-            severity: 0,
-            title: "Evolução consistente em " + productive.length + " atleta" + (productive.length === 1 ? "" : "s"),
-            athletes: names + more,
-            recommendation: "Fase produtiva. Manter estímulo atual e monitorar sinais de fadiga (velocidade em cargas fixas, feedback subjetivo)."
-          });
+          grouped.push({ severity: 0, title: "Evolução consistente em " + productive.length + " atleta" + (productive.length === 1 ? "" : "s"), athletes: names + more,
+            recommendation: "Fase produtiva. Manter estímulo atual e monitorar sinais de fadiga." });
         }
-        if (grouped.length === 0) {
-          grouped.push({
-            severity: 0,
-            title: "Sem achados relevantes no período",
-            athletes: "Dados dentro da variabilidade normal.",
-            recommendation: "Continuar monitoramento. Considerar aumentar densidade de sessões de teste."
-          });
-        }
+        if (grouped.length === 0) grouped.push({ severity: 0, title: "Sem achados relevantes no período", athletes: "Dados dentro da variabilidade normal.", recommendation: "Continuar monitoramento." });
         return grouped;
       })();
 
-      const meta = {
-        exercisesLabel, scopeLabel, periodStr, today, targetEx,
-        primaryLabel: primaryForPdf.metric.label,
-        primarySubtitle: primaryForPdf.metric.subtitle,
-        primaryDescription: primaryForPdf.metric.description
-      };
+      const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx };
 
-      // Captura gráfico atual da tela (se existir Recharts na página)
-      let chartImageDataUrl = null;
-      const chartNode = document.querySelector(".recharts-wrapper");
-      if (chartNode) {
-        try {
-          const canvas = await window.html2canvas(chartNode, { scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false });
-          chartImageDataUrl = canvas.toDataURL("image/png");
-        } catch (e) { console.warn("Chart capture failed:", e); }
-      }
-
-      // Cria container oculto e renderiza PdfLayout dentro
+      // Cria container oculto e renderiza PdfLayout
       const container = document.createElement("div");
       container.style.cssText = "position:absolute;left:-99999px;top:0;background:#fff;z-index:-1;";
       document.body.appendChild(container);
-
       const root = ReactDOM.createRoot(container);
       await new Promise(resolve => {
         root.render(React.createElement(PdfLayout, {
-          meta, executiveSummary, metricsData, comparisonRows, chartImageDataUrl, groupedFindings
+          meta, executiveSummary, metricsData, comparisonRows, chartsPerMetric, groupedFindings
         }));
-        // Aguarda 2 frames + timeout pra garantir render de fontes
-        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 400)));
+        // Aguarda 2 frames + 800ms pra Recharts renderizar dentro do container
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 800)));
       });
 
-      // Captura cada página
       const pages = container.querySelectorAll(".pdf-page");
       const { jsPDF } = window.jspdf;
       const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
@@ -5307,7 +5361,6 @@ function ReportsView({ athletes, snapshots }) {
         pdf.addImage(imgData, "PNG", 0, 0, 210, 297);
       }
 
-      // Cleanup
       root.unmount();
       document.body.removeChild(container);
 
