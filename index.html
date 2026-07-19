@@ -4270,10 +4270,39 @@ function LineChart({ series, height, unit, showArea, showAnnotations }) {
     return row;
   });
 
-  // Formatter só mês (data completa vai no tooltip)
-  const xTickFormatter = (d) => {
-    const dt = new Date(d);
-    return dt.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "");
+  // Ticks estratégicos: primeiro dia de cada mês presente + primeiro e último ponto
+  const dateStrs = dataset.map(d => d.date).sort();
+  const strategicTicks = React.useMemo(() => {
+    if (dateStrs.length === 0) return [];
+    const set = new Set();
+    set.add(dateStrs[0]);
+    set.add(dateStrs[dateStrs.length - 1]);
+    let lastMonth = null;
+    dateStrs.forEach(d => {
+      const m = d.substring(0, 7); // YYYY-MM
+      if (m !== lastMonth) {
+        set.add(d); // primeira ocorrência desse mês
+        lastMonth = m;
+      }
+    });
+    return Array.from(set).sort();
+  }, [dateStrs.join(",")]);
+
+  // Custom tick: mostra "DD" em cima, "MÊS" embaixo quando é primeiro do mês
+  const CustomDateTick = ({ x, y, payload }) => {
+    const dt = new Date(payload.value);
+    const day = dt.getDate();
+    const monthShort = dt.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "").toUpperCase();
+    // Mostra mês se é o primeiro tick com esse mês (comparando com strategicTicks anterior)
+    const idx = strategicTicks.indexOf(payload.value);
+    const prev = idx > 0 ? strategicTicks[idx - 1] : null;
+    const prevMonth = prev ? new Date(prev).getMonth() : -1;
+    const curMonth = dt.getMonth();
+    const showMonth = idx === 0 || curMonth !== prevMonth;
+    return React.createElement("g", { transform: "translate(" + x + "," + y + ")" },
+      React.createElement("text", { x: 0, y: 0, dy: 12, textAnchor: "middle", fontSize: 10, fill: "#525252", fontWeight: 500 }, day),
+      showMonth && React.createElement("text", { x: 0, y: 0, dy: 26, textAnchor: "middle", fontSize: 9, fill: "#A3A3A3", fontWeight: 600, letterSpacing: ".05em" }, monthShort)
+    );
   };
 
   // Calcula média e recorde da primeira série (só se 1 série ativa)
@@ -4291,7 +4320,7 @@ function LineChart({ series, height, unit, showArea, showAnnotations }) {
   const seriesElement = showArea ? RC.Area : RC.Line;
 
   return el(RC.ResponsiveContainer, { width: "100%", height: H },
-    el(chartType, { data: dataset, margin: { top: 15, right: 20, left: 5, bottom: 5 } },
+    el(chartType, { data: dataset, margin: { top: 15, right: 20, left: 5, bottom: 20 } },
       el("defs", null,
         ...series.map((s, i) => {
           const color = REPORT_COLORS[i % REPORT_COLORS.length];
@@ -4303,12 +4332,13 @@ function LineChart({ series, height, unit, showArea, showAnnotations }) {
       ),
       el(RC.CartesianGrid, { strokeDasharray: "0", stroke: "#F5F5F5", vertical: false }),
       el(RC.XAxis, {
-        dataKey: "date", tickFormatter: xTickFormatter,
-        tick: { fontSize: 10, fill: R.textMuted, fontWeight: 500 },
+        dataKey: "date",
+        tick: el(CustomDateTick),
+        ticks: strategicTicks,
         axisLine: false, tickLine: false,
         tickMargin: 8,
-        interval: "preserveStartEnd",
-        minTickGap: 40
+        height: 42,
+        interval: 0
       }),
       el(RC.YAxis, {
         tick: { fontSize: 10, fill: R.textMuted, fontWeight: 500 },
@@ -4547,7 +4577,7 @@ function ReportsView({ athletes, snapshots }) {
   const [selected, setSelected] = useState(["Profissional"]); // default: Profissional carregado
   const [exercise, setExercise] = useState("Back Squat"); // exercício ativo pra layout single
   const [exercises, setExercises] = useState(["Back Squat"]); // multi: quando vazio ou 1, layout single
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [openDropdown, setOpenDropdown] = useState(null); // qual dropdown do header está aberto
   const [period, setPeriod] = useState("30d");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
@@ -4683,11 +4713,12 @@ function ReportsView({ athletes, snapshots }) {
   }, [mode, selected, exercise, dateRange, snapshots, activeAthletes]);
 
   // ── Benchmark: constrói série de referência ──
-  const buildBenchmark = React.useCallback((metric) => {
+  const buildBenchmark = React.useCallback((metric, exOverride) => {
     if (benchmarkType === "none") return null;
+    const ex = exOverride || exercise;
     const [dMin, dMax] = dateRange;
     const relevantSnaps = snapshots.filter(s =>
-      s.exercise === exercise && s.session_date >= dMin && s.session_date <= dMax
+      s.exercise === ex && s.session_date >= dMin && s.session_date <= dMax
     );
     let athIds = [];
     let benchLabel = "";
@@ -4749,7 +4780,7 @@ function ReportsView({ athletes, snapshots }) {
   }, [exercise, dateRange, snapshots, activeAthletes]);
 
   // ── Tabela comparativa: uma linha por atleta com todas métricas + sparkline ──
-  const comparisonTableData = React.useMemo(() => {
+  const buildComparisonForEx = React.useCallback((targetExArg) => {
     if (selected.length === 0) return [];
     const [dMin, dMax] = dateRange;
     const relevantSnaps = snapshots.filter(s =>
@@ -4767,16 +4798,13 @@ function ReportsView({ athletes, snapshots }) {
         activeAthletes.filter(a => (a.categories || []).includes(cat)).forEach(a => athletesToShow.push(a));
       });
     }
-    // Dedup
     const seen = new Set();
     athletesToShow = athletesToShow.filter(a => { if (seen.has(a.id)) return false; seen.add(a.id); return true; });
 
-    const targetEx = exercises.length === 1 ? exercises[0] : exercise;
     return athletesToShow.map(ath => {
       const row = { athlete: ath };
       METRICS.forEach(metric => {
-        const snaps = relevantSnaps.filter(s => s.athlete_id === ath.id && s.exercise === targetEx);
-        // Um ponto por dia = maior valor
+        const snaps = relevantSnaps.filter(s => s.athlete_id === ath.id && s.exercise === targetExArg);
         const byDate = {};
         snaps.forEach(s => {
           const v = metric.getValue(s, ath);
@@ -4797,7 +4825,13 @@ function ReportsView({ athletes, snapshots }) {
       });
       return row;
     });
-  }, [selected, mode, dateRange, snapshots, activeAthletes, exercises, exercise]);
+  }, [selected, mode, dateRange, snapshots, activeAthletes]);
+
+  // Mantém compat: usa primeiro exercício selecionado
+  const comparisonTableData = React.useMemo(() => {
+    const targetEx = exercises.length === 1 ? exercises[0] : exercises[0];
+    return buildComparisonForEx(targetEx);
+  }, [buildComparisonForEx, exercises]);
 
   // ── Análise algorítmica: cruza métricas e gera recomendações ──
   const algorithmicAnalysis = React.useMemo(() => {
@@ -4916,256 +4950,502 @@ function ReportsView({ athletes, snapshots }) {
   }, [selected, primaryMetric, buildSeries, editedSummary, exercise, exercises]);
 
   // Exportar PDF do dashboard atual
+  // ═══ PDF ESTRUTURADO — Relatório multi-página para comissão técnica ═══
   const exportPDF = async () => {
-    const node = document.querySelector('[data-reports-content]');
-    if (!node || !window.html2canvas || !window.jspdf) return;
+    if (!window.jspdf || !window.html2canvas) { alert("Biblioteca de PDF não carregada"); return; }
     try {
-      const canvas = await window.html2canvas(node, { scale: 2, backgroundColor: '#FAFAFA', useCORS: true, logging: false });
-      const imgData = canvas.toDataURL('image/png');
       const { jsPDF } = window.jspdf;
-      const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+      const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
       const pageW = 210, pageH = 297;
-      const margin = 14;
-      const imgW = pageW - margin * 2;
-      const imgH = (canvas.height * imgW) / canvas.width;
-      const targetEx = exercises.length === 1 ? exercises[0] : exercise;
+      const margin = 16;
+      const contentW = pageW - margin * 2;
+      const targetEx = exercises.length === 1 ? exercises[0] : exercises[0];
+      const scopeLabel = mode === "atleta" ? (selected.length === 1 ? "Atleta individual" : selected.length + " atletas")
+        : mode === "grupo" ? (selected.length === 1 ? "Categoria: " + selected[0] : selected.length + " categorias")
+        : (selected.length === 1 ? "Posição: " + selected[0] : selected.length + " posições");
+      const periodStr = dateRange[0].split("-").reverse().join("/") + " - " + dateRange[1].split("-").reverse().join("/");
+      const today = new Date().toLocaleDateString("pt-BR");
 
-      // ═══ HEADER PREMIUM (sem faixa preta, tipografia limpa) ═══
-      // Título esquerda
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(14);
-      pdf.setTextColor(10, 10, 11);
-      pdf.text('Relatorio de Performance', margin, 18);
-      // Subtitle
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(9);
-      pdf.setTextColor(115, 115, 115);
-      pdf.text(targetEx + '  ·  ' + dateRange[0].split('-').reverse().join('/') + ' — ' + dateRange[1].split('-').reverse().join('/'), margin, 24);
-      // Right-align: CAP + data
-      pdf.setFontSize(9);
-      pdf.setTextColor(10, 10, 11);
-      pdf.setFont('helvetica', 'bold');
-      pdf.text('CAP Performance', pageW - margin, 18, { align: 'right' });
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(8);
-      pdf.setTextColor(163, 163, 163);
-      pdf.text(new Date().toLocaleDateString('pt-BR'), pageW - margin, 24, { align: 'right' });
-      // Linha fina divisória
-      pdf.setDrawColor(234, 234, 234);
-      pdf.setLineWidth(0.2);
-      pdf.line(margin, 30, pageW - margin, 30);
-
-      // ═══ CONTEÚDO DO DASHBOARD ═══
-      let y = 35;
-      const footerReserve = 12;
-      const availH = pageH - y - footerReserve;
-
-      const addFooter = (pageNum, totalPages) => {
+      const addFooter = (pageNum, totalPages, section) => {
         pdf.setFontSize(7);
         pdf.setTextColor(163, 163, 163);
-        pdf.setFont('helvetica', 'normal');
-        pdf.text('vbtforce.vercel.app', margin, pageH - 6);
-        pdf.text('Página ' + pageNum + ' de ' + totalPages, pageW - margin, pageH - 6, { align: 'right' });
+        pdf.setFont("helvetica", "normal");
+        pdf.text(section || "VBT-force", margin, pageH - 8);
+        pdf.text("Página " + pageNum + " de " + totalPages, pageW - margin, pageH - 8, { align: "right" });
+        pdf.setDrawColor(234, 234, 234);
+        pdf.setLineWidth(0.15);
+        pdf.line(margin, pageH - 12, pageW - margin, pageH - 12);
       };
 
-      // Calcula total de páginas
-      const totalPages = Math.ceil(imgH / availH);
+      const addPageHeader = (section) => {
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(9);
+        pdf.setTextColor(10, 10, 11);
+        pdf.text("Relatório de Performance", margin, 12);
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(8);
+        pdf.setTextColor(115, 115, 115);
+        pdf.text(section, pageW - margin, 12, { align: "right" });
+        pdf.setDrawColor(234, 234, 234);
+        pdf.setLineWidth(0.15);
+        pdf.line(margin, 15, pageW - margin, 15);
+      };
 
-      if (imgH <= availH) {
-        pdf.addImage(imgData, 'PNG', margin, y, imgW, imgH);
-        addFooter(1, 1);
-      } else {
-        let remaining = imgH;
-        let sourceY = 0;
-        let pageNum = 1;
-        while (remaining > 0) {
-          const chunkH = Math.min(availH, remaining);
-          const chunkCanvas = document.createElement('canvas');
-          chunkCanvas.width = canvas.width;
-          chunkCanvas.height = (chunkH / imgH) * canvas.height;
-          const ctx = chunkCanvas.getContext('2d');
-          ctx.drawImage(canvas, 0, sourceY, canvas.width, chunkCanvas.height, 0, 0, canvas.width, chunkCanvas.height);
-          pdf.addImage(chunkCanvas.toDataURL('image/png'), 'PNG', margin, y, imgW, chunkH);
-          addFooter(pageNum, totalPages);
-          sourceY += chunkCanvas.height;
-          remaining -= chunkH;
-          pageNum++;
-          if (remaining > 0) { pdf.addPage(); y = margin; }
+      // ═══ PÁGINA 1: CAPA ═══
+      // Bloco preto no topo
+      pdf.setFillColor(10, 10, 11);
+      pdf.rect(0, 0, pageW, 90, "F");
+      // Título
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(28);
+      pdf.text("Relatório de", margin, 40);
+      pdf.text("Performance", margin, 54);
+      // Subtitle
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.setTextColor(163, 163, 163);
+      pdf.text("Análise VBT · CAP Performance", margin, 68);
+      // Bloco branco embaixo com metadados
+      pdf.setTextColor(10, 10, 11);
+      pdf.setFontSize(9);
+      pdf.setFont("helvetica", "bold");
+      pdf.text("EXERCÍCIO", margin, 130);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(14);
+      pdf.text(exercises.length === 1 ? targetEx : exercises.join(", "), margin, 137);
+
+      pdf.setFontSize(9);
+      pdf.setFont("helvetica", "bold");
+      pdf.text("ESCOPO", margin, 155);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(14);
+      pdf.text(scopeLabel, margin, 162);
+
+      pdf.setFontSize(9);
+      pdf.setFont("helvetica", "bold");
+      pdf.text("PERÍODO", margin, 180);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(14);
+      pdf.text(periodStr, margin, 187);
+
+      // Rodapé da capa
+      pdf.setFontSize(8);
+      pdf.setTextColor(115, 115, 115);
+      pdf.text("Emitido em " + today, margin, pageH - 20);
+      pdf.text("vbtforce.vercel.app", pageW - margin, pageH - 20, { align: "right" });
+
+      // ═══ PÁGINA 2: SUMÁRIO EXECUTIVO + KPIs ═══
+      pdf.addPage();
+      addPageHeader("Sumário Executivo");
+      let y = 28;
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(16);
+      pdf.setTextColor(10, 10, 11);
+      pdf.text("Sumário Executivo", margin, y);
+      y += 8;
+
+      // Resumo
+      pdf.setFillColor(250, 250, 250);
+      pdf.rect(margin, y, contentW, 30, "F");
+      pdf.setDrawColor(10, 10, 11);
+      pdf.setLineWidth(0.8);
+      pdf.line(margin, y, margin, y + 30);
+      pdf.setLineWidth(0.15);
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.setTextColor(60, 60, 60);
+      const summaryLines = pdf.splitTextToSize(executiveSummary || "Análise em elaboração.", contentW - 8);
+      pdf.text(summaryLines, margin + 4, y + 8);
+      y += 40;
+
+      // KPIs em grid 2x3
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(11);
+      pdf.setTextColor(10, 10, 11);
+      pdf.text("Indicadores no período", margin, y);
+      y += 6;
+
+      const metricsData = METRICS.map(m => {
+        const series = buildSeries(m, targetEx);
+        let currentVal = null, deltaPct = null;
+        const firstSeries = series[0];
+        if (firstSeries && firstSeries.points.length > 0) {
+          const pts = firstSeries.points.filter(p => p.value != null).sort((a,b) => new Date(a.date) - new Date(b.date));
+          if (pts.length > 0) {
+            const nEnd = Math.min(3, Math.ceil(pts.length / 2));
+            currentVal = pts.slice(-nEnd).reduce((s,p) => s + p.value, 0) / nEnd;
+            const firstVal = pts.slice(0, nEnd).reduce((s,p) => s + p.value, 0) / nEnd;
+            if (firstVal > 0) deltaPct = ((currentVal - firstVal) / firstVal) * 100;
+          }
         }
+        return { metric: m, currentVal, deltaPct };
+      });
+
+      const kpiW = (contentW - 8) / 3;
+      const kpiH = 34;
+      metricsData.slice(0, 6).forEach((md, i) => {
+        const col = i % 3;
+        const row = Math.floor(i / 3);
+        const kx = margin + col * (kpiW + 4);
+        const ky = y + row * (kpiH + 4);
+        // Card
+        pdf.setDrawColor(234, 234, 234);
+        pdf.setLineWidth(0.15);
+        pdf.rect(kx, ky, kpiW, kpiH, "S");
+        // Label
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(7);
+        pdf.setTextColor(115, 115, 115);
+        const label = md.metric.label.replace(/\s*\([^)]*\)/, "").toUpperCase();
+        pdf.text(label, kx + 4, ky + 6);
+        // Valor
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(16);
+        pdf.setTextColor(10, 10, 11);
+        const valStr = md.currentVal != null ? (md.currentVal >= 100 ? md.currentVal.toFixed(0) : md.currentVal.toFixed(2)) : "—";
+        pdf.text(valStr, kx + 4, ky + 18);
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(8);
+        pdf.setTextColor(115, 115, 115);
+        pdf.text(md.metric.unit, kx + 4 + pdf.getTextWidth(valStr) + 2, ky + 18);
+        // Delta
+        if (md.deltaPct != null) {
+          const isUp = md.deltaPct > 1;
+          const isDown = md.deltaPct < -1;
+          if (isUp) pdf.setTextColor(16, 185, 129);
+          else if (isDown) pdf.setTextColor(239, 68, 68);
+          else pdf.setTextColor(115, 115, 115);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(9);
+          const deltaStr = (md.deltaPct > 0 ? "+" : "") + md.deltaPct.toFixed(1) + "%";
+          pdf.text(deltaStr, kx + 4, ky + 28);
+        }
+      });
+      y += Math.ceil(metricsData.length / 3) * (kpiH + 4);
+
+      addFooter(2, 5, "Sumário Executivo");
+
+      // ═══ PÁGINA 3: GRÁFICO PRINCIPAL ═══
+      pdf.addPage();
+      addPageHeader("Evolução — " + primary.metric.label);
+      y = 28;
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(16);
+      pdf.setTextColor(10, 10, 11);
+      pdf.text(primary.metric.label, margin, y);
+      y += 6;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.setTextColor(115, 115, 115);
+      const descLines = pdf.splitTextToSize(primary.metric.description, contentW);
+      pdf.text(descLines, margin, y);
+      y += descLines.length * 4 + 6;
+
+      // Captura gráfico como imagem (procura svg do gráfico principal na DOM)
+      const chartNode = document.querySelector(".recharts-wrapper");
+      if (chartNode) {
+        try {
+          const canvas = await window.html2canvas(chartNode, { scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false });
+          const imgData = canvas.toDataURL("image/png");
+          const imgH = (canvas.height * contentW) / canvas.width;
+          const maxH = pageH - y - 20;
+          const finalH = Math.min(imgH, maxH);
+          const finalW = (canvas.width * finalH) / canvas.height;
+          const xOffset = margin + (contentW - finalW) / 2;
+          pdf.addImage(imgData, "PNG", xOffset, y, finalW, finalH);
+          y += finalH + 5;
+        } catch (e) { console.warn("Chart capture failed:", e); }
       }
-      pdf.save('relatorio-' + targetEx.replace(/\s+/g, '-').toLowerCase() + '-' + new Date().toISOString().slice(0,10) + '.pdf');
-    } catch(e) { console.error('Erro PDF:', e); alert('Erro ao gerar PDF: ' + e.message); }
+
+      addFooter(3, 5, "Evolução");
+
+      // ═══ PÁGINA 4: TABELA COMPARATIVA ═══
+      pdf.addPage();
+      addPageHeader("Tabela Comparativa");
+      y = 28;
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(16);
+      pdf.setTextColor(10, 10, 11);
+      pdf.text("Comparativo por atleta", margin, y);
+      y += 6;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.setTextColor(115, 115, 115);
+      pdf.text(targetEx + " · " + periodStr, margin, y);
+      y += 8;
+
+      // Header da tabela
+      const cols = [
+        { key: "athlete", label: "ATLETA", w: 44 },
+        { key: "e1rm", label: "e1RM", w: 22 },
+        { key: "e1rm_rel", label: "F.REL", w: 22 },
+        { key: "peak_power_rel", label: "PPR", w: 22 },
+        { key: "peak_velocity", label: "V.PICO", w: 22 },
+        { key: "max_load", label: "C.MÁX", w: 22 }
+      ];
+      const rowH = 8;
+      pdf.setFillColor(245, 245, 245);
+      pdf.rect(margin, y, contentW, rowH, "F");
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8);
+      pdf.setTextColor(10, 10, 11);
+      let x = margin + 3;
+      cols.forEach(c => {
+        pdf.text(c.label, x, y + 5.5);
+        x += c.w;
+      });
+      y += rowH;
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      comparisonTableData.forEach((row, i) => {
+        if (y + rowH > pageH - 20) return;
+        if (i % 2 === 1) {
+          pdf.setFillColor(250, 250, 250);
+          pdf.rect(margin, y, contentW, rowH, "F");
+        }
+        pdf.setTextColor(10, 10, 11);
+        let cx = margin + 3;
+        const athName = row.athlete.nickname || row.athlete.name;
+        pdf.text(athName.substring(0, 24), cx, y + 5.5);
+        cx += cols[0].w;
+        ["e1rm","e1rm_rel","peak_power_rel","peak_velocity","max_load"].forEach((key, ci) => {
+          const cell = row[key];
+          if (cell && cell.current != null) {
+            const val = cell.current >= 100 ? cell.current.toFixed(0) : cell.current.toFixed(2);
+            pdf.setTextColor(10, 10, 11);
+            pdf.text(val, cx, y + 5.5);
+            if (cell.delta != null) {
+              pdf.setFontSize(7);
+              if (cell.delta > 1) pdf.setTextColor(16, 185, 129);
+              else if (cell.delta < -1) pdf.setTextColor(239, 68, 68);
+              else pdf.setTextColor(115, 115, 115);
+              const dstr = (cell.delta > 0 ? "+" : "") + cell.delta.toFixed(1) + "%";
+              pdf.text(dstr, cx + 10, y + 5.5);
+              pdf.setFontSize(9);
+            }
+          } else {
+            pdf.setTextColor(163, 163, 163);
+            pdf.text("—", cx, y + 5.5);
+          }
+          cx += cols[ci + 1].w;
+        });
+        y += rowH;
+      });
+
+      addFooter(4, 5, "Comparativo");
+
+      // ═══ PÁGINA 5: ANÁLISE ALGORÍTMICA ═══
+      pdf.addPage();
+      addPageHeader("Análise Automática");
+      y = 28;
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(16);
+      pdf.setTextColor(10, 10, 11);
+      pdf.text("Recomendações", margin, y);
+      y += 6;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.setTextColor(115, 115, 115);
+      pdf.text("Observações baseadas em cruzamento de métricas + literatura VBT", margin, y);
+      y += 10;
+
+      if (algorithmicAnalysis.length === 0) {
+        pdf.setFontSize(10);
+        pdf.setTextColor(115, 115, 115);
+        pdf.text("Nenhuma observação crítica identificada no período.", margin, y);
+      } else {
+        algorithmicAnalysis.slice(0, 8).forEach((f, i) => {
+          if (y > pageH - 40) return;
+          const sevColor = f.severity === 2 ? [239,68,68] : f.severity === 1 ? [245,158,11] : [16,185,129];
+          const sevLabel = f.severity === 2 ? "ATENÇÃO" : f.severity === 1 ? "AJUSTE" : "POSITIVO";
+          // Barra lateral colorida
+          pdf.setFillColor(...sevColor);
+          pdf.rect(margin, y, 1.5, 18, "F");
+          // Badge
+          pdf.setFillColor(sevColor[0], sevColor[1], sevColor[2], "F");
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(7);
+          pdf.setTextColor(...sevColor);
+          pdf.text(sevLabel, margin + 4, y + 4);
+          // Finding
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(9.5);
+          pdf.setTextColor(10, 10, 11);
+          const findLines = pdf.splitTextToSize(f.finding, contentW - 6);
+          pdf.text(findLines, margin + 4, y + 9);
+          // Recomendação
+          pdf.setFont("helvetica", "normal");
+          pdf.setFontSize(9);
+          pdf.setTextColor(80, 80, 80);
+          const recLines = pdf.splitTextToSize("→ " + f.recommendation, contentW - 6);
+          pdf.text(recLines, margin + 4, y + 9 + findLines.length * 4);
+          y += 9 + findLines.length * 4 + recLines.length * 4 + 8;
+        });
+      }
+
+      addFooter(5, 5, "Análise Automática");
+
+      pdf.save("relatorio-cap-" + targetEx.replace(/\s+/g, "-").toLowerCase() + "-" + new Date().toISOString().slice(0,10) + ".pdf");
+    } catch(e) { console.error("Erro PDF:", e); alert("Erro ao gerar PDF: " + e.message); }
   };
 
+
   return el("div", { style: { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", background: R.bg } },
-    // ─── HEADER compacto (título + filtros + ações em UMA linha) ───
-    el("div", { style: { padding: "12px 24px", background: "#fff", borderBottom: "1px solid " + R.border, flexShrink: 0 } },
-      el("div", { style: { display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" } },
+    // ─── HEADER: filtros em linha com dropdowns ───
+    el("div", { style: { padding: "12px 24px", background: "#fff", borderBottom: "1px solid " + R.border, flexShrink: 0, position: "relative", zIndex: 50 } },
+      el("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
         // Título
-        el("h1", { style: { fontSize: 15, fontWeight: 600, color: R.text, margin: 0, letterSpacing: "-.02em", flexShrink: 0 } }, "Relatórios"),
-        // Separador vertical
-        el("div", { style: { width: 1, height: 20, background: R.border, flexShrink: 0 } }),
-        // Botão Filtros
-        el("button", { onClick: () => setFiltersOpen(!filtersOpen), style: {
-          display: "inline-flex", alignItems: "center", gap: 6,
-          padding: "6px 12px", background: filtersOpen ? R.text : "#F5F5F5",
-          color: filtersOpen ? "#fff" : R.text,
+        el("h1", { style: { fontSize: 15, fontWeight: 600, color: R.text, margin: 0, letterSpacing: "-.02em", flexShrink: 0, marginRight: 6 } }, "Relatórios"),
+        el("div", { style: { width: 1, height: 20, background: R.border, flexShrink: 0, marginRight: 4 } }),
+
+        // Componente dropdown reutilizável (inline)
+        (() => {
+          const FilterDropdown = ({ id, label, value, children }) => {
+            const open = openDropdown === id;
+            return el("div", { style: { position: "relative" } },
+              el("button", { onClick: () => setOpenDropdown(open ? null : id), style: {
+                display: "inline-flex", alignItems: "center", gap: 6,
+                padding: "6px 12px", background: open ? R.text : "#F5F5F5",
+                color: open ? "#fff" : R.text,
+                border: "1px solid " + (open ? R.text : "transparent"),
+                borderRadius: 6, fontSize: 11.5, fontWeight: 500,
+                cursor: "pointer", whiteSpace: "nowrap"
+              }},
+                el("span", { style: { opacity: 0.65, fontSize: 10, letterSpacing: ".04em", textTransform: "uppercase" } }, label),
+                el("span", { style: { fontWeight: 600 } }, value),
+                el("svg", { width: 10, height: 10, viewBox: "0 0 12 12", fill: "none", style: { opacity: 0.6 } },
+                  el("path", { d: "M3 5l3 3 3-3", stroke: "currentColor", strokeWidth: 1.5, fill: "none", strokeLinecap: "round", strokeLinejoin: "round" })
+                )
+              ),
+              open && el("div", { style: {
+                position: "absolute", top: "calc(100% + 6px)", left: 0,
+                background: "#fff", border: "1px solid " + R.border, borderRadius: 8,
+                boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
+                minWidth: 220, maxHeight: 380, overflowY: "auto",
+                padding: 6, zIndex: 100
+              }}, children)
+            );
+          };
+
+          const dropdownItem = (label, active, onClick, color) => el("button", { onClick, style: {
+            width: "100%", textAlign: "left", padding: "7px 10px", borderRadius: 5,
+            border: "none", background: active ? R.text : "transparent",
+            color: active ? "#fff" : R.text,
+            fontSize: 12, fontWeight: 500, cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 8
+          }},
+            color && el("span", { style: { width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 } }),
+            el("span", null, label)
+          );
+
+          const modeLabel = mode === "atleta" ? "Atleta" : mode === "grupo" ? "Categoria" : "Posição";
+          const selectorLabel = mode === "atleta" ? "Atletas" : mode === "grupo" ? "Categorias" : "Posições";
+          const selectorValue = selected.length === 0 ? "nenhum" : selected.length === 1
+            ? (mode === "atleta" ? (activeAthletes.find(a => a.id === selected[0]) || {}).nickname || (activeAthletes.find(a => a.id === selected[0]) || {}).name || "?"
+                : selected[0])
+            : selected.length + " selecionados";
+          const periodLabel = period === "30d" ? "30 dias" : period === "90d" ? "90 dias" : period === "temporada" ? "Temporada" : "Custom";
+          const benchLabel = benchmarkType === "none" ? "Nenhuma" :
+                             benchmarkType === "team_avg" ? "Média" :
+                             benchmarkType === "team_max" ? "Máximo" : "Atleta";
+          const exercisesLabel = exercises.length === 1 ? exercises[0] : exercises.length + " exercícios";
+
+          return el(React.Fragment, null,
+            // Exercícios (multi-select)
+            el(FilterDropdown, { id: "exercicios", label: "Exercícios", value: exercisesLabel },
+              ...EXERCISES.map(ex => {
+                const active = exercises.includes(ex);
+                return dropdownItem(ex, active, () => {
+                  if (active && exercises.length > 1) setExercises(exercises.filter(x => x !== ex));
+                  else if (!active) setExercises([...exercises, ex]);
+                  setExercise(ex);
+                });
+              })
+            ),
+            // Modo
+            el(FilterDropdown, { id: "modo", label: "Modo", value: modeLabel },
+              ...[["atleta","Atleta"],["grupo","Categoria"],["posicao","Posição"]].map(([v,l]) =>
+                dropdownItem(l, mode === v, () => { setMode(v); setOpenDropdown("selector"); })
+              )
+            ),
+            // Selector (atletas/categorias/posições)
+            el(FilterDropdown, { id: "selector", label: selectorLabel, value: selectorValue },
+              selected.length > 0 && el("div", { style: { padding: "4px 10px 8px", borderBottom: "1px solid " + R.border, marginBottom: 4 } },
+                el("button", { onClick: () => setSelected([]), style: {
+                  fontSize: 11, color: R.textSub, background: "transparent", border: "none", cursor: "pointer", padding: 0, fontWeight: 500
+                }}, "Limpar seleção (" + selected.length + "/4)")
+              ),
+              ...options.map(opt => {
+                const isSel = selected.includes(opt.id);
+                const idx = selected.indexOf(opt.id);
+                const color = isSel ? REPORT_COLORS[idx % REPORT_COLORS.length] : null;
+                return dropdownItem(opt.label, isSel, () => toggleSelected(opt.id), color);
+              })
+            ),
+            // Período
+            el(FilterDropdown, { id: "periodo", label: "Período", value: periodLabel },
+              ...[["30d","Últimos 30 dias"],["90d","Últimos 90 dias"],["temporada","Temporada"],["custom","Período custom"]].map(([v,l]) =>
+                dropdownItem(l, period === v, () => setPeriod(v))
+              ),
+              period === "custom" && el("div", { style: { padding: "8px 10px 4px", borderTop: "1px solid " + R.border, marginTop: 4, display: "flex", gap: 6, alignItems: "center" } },
+                el("input", { type: "date", value: customStart, onChange: e => setCustomStart(e.target.value), style: { padding: "4px 6px", borderRadius: 4, border: "1px solid " + R.border, fontSize: 11, flex: 1 } }),
+                el("span", { style: { fontSize: 10, color: R.textMuted } }, "→"),
+                el("input", { type: "date", value: customEnd, onChange: e => setCustomEnd(e.target.value), style: { padding: "4px 6px", borderRadius: 4, border: "1px solid " + R.border, fontSize: 11, flex: 1 } })
+              )
+            ),
+            // Referência (benchmark)
+            el(FilterDropdown, { id: "benchmark", label: "Referência", value: benchLabel },
+              ...[["none","Nenhuma"],["team_avg","Média"],["team_max","Máximo"],["athlete","Atleta específico"]].map(([v,l]) =>
+                dropdownItem(l, benchmarkType === v, () => setBenchmarkType(v))
+              ),
+              benchmarkType === "athlete" && el("div", { style: { padding: "8px 10px 4px", borderTop: "1px solid " + R.border, marginTop: 4 } },
+                el("select", { value: benchmarkAthlete || "", onChange: e => setBenchmarkAthlete(e.target.value || null), style: {
+                  width: "100%", padding: "5px 8px", borderRadius: 4, border: "1px solid " + R.border, fontSize: 11
+                }},
+                  el("option", { value: "" }, "Selecione..."),
+                  ...activeAthletes.map(a => el("option", { key: a.id, value: a.id }, a.nickname || a.name))
+                )
+              )
+            )
+          );
+        })(),
+
+        // Spacer
+        el("div", { style: { flex: 1, minWidth: 20 } }),
+
+        // Ações à direita
+        alerts.length > 0 && el("button", { onClick: () => setShowAlerts(true), style: {
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "6px 10px", background: "#fff", color: R.text,
+          border: "1px solid " + R.border, borderRadius: 6, fontSize: 11.5, fontWeight: 500,
+          cursor: "pointer"
+        }},
+          el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: R.negative, display: "inline-block" } }),
+          el("span", null, alerts.length)
+        ),
+        selected.length > 0 && el("button", { onClick: exportPDF, style: {
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "6px 12px", background: R.text, color: "#fff",
           border: "none", borderRadius: 6, fontSize: 11.5, fontWeight: 500,
           cursor: "pointer"
         }},
-          el("span", { style: { opacity: 0.7 } }, filtersOpen ? "Fechar" : "Filtros"),
-          el("svg", { width: 10, height: 10, viewBox: "0 0 12 12", fill: "none", style: { transform: filtersOpen ? "rotate(180deg)" : "none", transition: "transform .15s" } },
-            el("path", { d: "M3 5l3 3 3-3", stroke: "currentColor", strokeWidth: 1.5, fill: "none", strokeLinecap: "round", strokeLinejoin: "round" })
-          )
-        ),
-        // Resumo do estado
-        el("div", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: R.textSub, flexWrap: "wrap", flex: 1, minWidth: 0 } },
-          el("span", { style: { fontWeight: 500, color: R.text } },
-            mode === "atleta" ? "Atleta" : mode === "grupo" ? "Categoria" : "Posição"),
-          el("span", { style: { color: R.textMuted } }, "·"),
-          el("span", null, selected.length > 0 ? (selected.length === 1 ? selected[0].toString().slice(0,20) : selected.length + " selecionados") : "nenhum selecionado"),
-          el("span", { style: { color: R.textMuted } }, "·"),
-          el("span", null, exercises.length === 1 ? exercises[0] : exercises.length + " exercícios"),
-          el("span", { style: { color: R.textMuted } }, "·"),
-          el("span", null, period === "30d" ? "30 dias" : period === "90d" ? "90 dias" : period === "temporada" ? "Temporada" : "Custom"),
-          benchmarkType !== "none" && el(React.Fragment, null,
-            el("span", { style: { color: R.textMuted } }, "·"),
-            el("span", { style: { fontStyle: "italic" } }, "Ref: " +
-              (benchmarkType === "team_avg" ? "Média" : benchmarkType === "team_max" ? "Máx" : "Atleta"))
-          )
-        ),
-        // Ações à direita
-        el("div", { style: { display: "flex", alignItems: "center", gap: 6, flexShrink: 0 } },
-          alerts.length > 0 && el("button", { onClick: () => setShowAlerts(true), style: {
-            display: "flex", alignItems: "center", gap: 6,
-            padding: "6px 10px", background: "#fff", color: R.text,
-            border: "1px solid " + R.border, borderRadius: 6, fontSize: 11.5, fontWeight: 500,
-            cursor: "pointer"
-          }},
-            el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: R.negative, display: "inline-block" } }),
-            el("span", null, alerts.length)
-          ),
-          selected.length > 0 && el("button", { onClick: exportPDF, style: {
-            display: "flex", alignItems: "center", gap: 6,
-            padding: "6px 12px", background: R.text, color: "#fff",
-            border: "none", borderRadius: 6, fontSize: 11.5, fontWeight: 500,
-            cursor: "pointer"
-          }},
-            Icon.Download(11, "#fff"),
-            el("span", null, "PDF")
-          )
-        )
-      ),
-      // ═══ DRAWER DE FILTROS EXPANSÍVEL ═══
-      filtersOpen && el("div", { style: {
-        marginTop: 10, padding: "16px 18px",
-        background: "#FAFAFA", borderRadius: 8, border: "1px solid " + R.border,
-        display: "flex", flexDirection: "column", gap: 14
-      }},
-        // Linha 1: modo, período
-        el("div", { style: { display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-end" } },
-          el("div", { style: { display: "flex", flexDirection: "column", gap: 5 } },
-            el("span", { style: { fontSize: 10, fontWeight: 500, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase" } }, "Modo"),
-            el("div", { style: { display: "flex", gap: 2, background: "#fff", padding: 2, borderRadius: 5, border: "1px solid " + R.border } },
-              ...[["atleta","Atleta"],["grupo","Categoria"],["posicao","Posição"]].map(([v,l]) =>
-                el("button", { key: v, onClick: () => setMode(v), style: {
-                  padding: "5px 10px", borderRadius: 4, fontSize: 11, fontWeight: 500, cursor: "pointer",
-                  border: "none",
-                  background: mode === v ? R.text : "transparent",
-                  color: mode === v ? "#fff" : R.textSub
-                }}, l)
-              )
-            )
-          ),
-          el("div", { style: { display: "flex", flexDirection: "column", gap: 5 } },
-            el("span", { style: { fontSize: 10, fontWeight: 500, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase" } }, "Período"),
-            el("div", { style: { display: "flex", gap: 2, background: "#fff", padding: 2, borderRadius: 5, border: "1px solid " + R.border } },
-              ...[["30d","30d"],["90d","90d"],["temporada","Temporada"],["custom","Custom"]].map(([v,l]) =>
-                el("button", { key: v, onClick: () => setPeriod(v), style: {
-                  padding: "5px 10px", borderRadius: 4, fontSize: 11, fontWeight: 500, cursor: "pointer",
-                  border: "none",
-                  background: period === v ? R.text : "transparent",
-                  color: period === v ? "#fff" : R.textSub
-                }}, l)
-              )
-            )
-          ),
-          period === "custom" && el("div", { style: { display: "flex", gap: 6, alignItems: "center" } },
-            el("input", { type: "date", value: customStart, onChange: e => setCustomStart(e.target.value), style: { padding: "5px 8px", borderRadius: 5, border: "1px solid " + R.border, fontSize: 11 } }),
-            el("span", { style: { fontSize: 10, color: R.textMuted } }, "→"),
-            el("input", { type: "date", value: customEnd, onChange: e => setCustomEnd(e.target.value), style: { padding: "5px 8px", borderRadius: 5, border: "1px solid " + R.border, fontSize: 11 } })
-          )
-        ),
-        // Linha 2: Exercícios (multi-select)
-        el("div", { style: { display: "flex", flexDirection: "column", gap: 5 } },
-          el("span", { style: { fontSize: 10, fontWeight: 500, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase" } }, "Exercícios (marca 1 para ver detalhado, 2 ou 3 para overview lado a lado)"),
-          el("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
-            ...EXERCISES.map(ex => {
-              const active = exercises.includes(ex);
-              return el("button", { key: ex, onClick: () => {
-                if (active && exercises.length > 1) setExercises(exercises.filter(x => x !== ex));
-                else if (!active) setExercises([...exercises, ex]);
-                setExercise(ex);
-              }, style: {
-                padding: "6px 12px", borderRadius: 6, fontSize: 11.5, fontWeight: 500, cursor: "pointer",
-                border: "1px solid " + (active ? R.text : R.border),
-                background: active ? R.text : "#fff",
-                color: active ? "#fff" : R.textSub
-              }}, ex);
-            })
-          )
-        ),
-        // Linha 3: Seleção de atletas/categorias/posições
-        el("div", { style: { display: "flex", flexDirection: "column", gap: 5 } },
-          el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
-            el("span", { style: { fontSize: 10, fontWeight: 500, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase" } },
-              "Selecionar até 4 " + (mode === "atleta" ? "atletas" : mode === "grupo" ? "categorias" : "posições") + " (" + selected.length + "/4)"),
-            selected.length > 0 && el("button", { onClick: () => setSelected([]), style: {
-              padding: "3px 8px", borderRadius: 4, border: "none", background: "transparent", fontSize: 10, fontWeight: 500, color: R.textSub, cursor: "pointer"
-            }}, "Limpar")
-          ),
-          el("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, maxHeight: mode === "atleta" ? 100 : 60, overflowY: "auto" } },
-            ...options.map(opt => {
-              const isSel = selected.includes(opt.id);
-              const idx = selected.indexOf(opt.id);
-              const color = isSel ? REPORT_COLORS[idx % REPORT_COLORS.length] : null;
-              return el("button", { key: opt.id, onClick: () => toggleSelected(opt.id), style: {
-                padding: "4px 10px", borderRadius: 4, fontSize: 11, fontWeight: 500, cursor: "pointer",
-                border: "1px solid " + (isSel ? color : R.border),
-                background: isSel ? color : "#fff",
-                color: isSel ? "#fff" : R.textSub,
-                opacity: (isSel || selected.length < 4) ? 1 : 0.35
-              }}, opt.label);
-            })
-          )
-        ),
-        // Linha 4: benchmark
-        el("div", { style: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" } },
-          el("span", { style: { fontSize: 10, fontWeight: 500, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase" } }, "Referência"),
-          el("div", { style: { display: "flex", gap: 2, background: "#fff", padding: 2, borderRadius: 5, border: "1px solid " + R.border } },
-            ...[["none","Nenhuma"],["team_avg","Média"],["team_max","Máximo"],["athlete","Atleta"]].map(([v,l]) =>
-              el("button", { key: v, onClick: () => setBenchmarkType(v), style: {
-                padding: "5px 10px", borderRadius: 4, fontSize: 11, fontWeight: 500, cursor: "pointer",
-                border: "none",
-                background: benchmarkType === v ? R.text : "transparent",
-                color: benchmarkType === v ? "#fff" : R.textSub
-              }}, l)
-            )
-          ),
-          benchmarkType === "athlete" && el("select", {
-            value: benchmarkAthlete || "",
-            onChange: e => setBenchmarkAthlete(e.target.value || null),
-            style: {
-              padding: "5px 8px", borderRadius: 5, border: "1px solid " + R.border,
-              fontSize: 11, fontWeight: 500, color: R.text, background: "#fff", minWidth: 180
-            }
-          },
-            el("option", { value: "" }, "Selecione..."),
-            ...activeAthletes.map(a => el("option", { key: a.id, value: a.id }, a.nickname || a.name))
-          )
+          Icon.Download(11, "#fff"),
+          el("span", null, "PDF")
         )
       )
     ),
+    // Overlay pra fechar dropdown ao clicar fora
+    openDropdown && el("div", { onClick: () => setOpenDropdown(null), style: {
+      position: "fixed", inset: 0, zIndex: 40, background: "transparent"
+    }}),
+
     // ═══ TABS INTERNAS ═══
     selected.length > 0 && el("div", { style: {
       display: "flex", gap: 2, padding: "12px 24px 0",
@@ -5194,9 +5474,9 @@ function ReportsView({ athletes, snapshots }) {
         ? el("div", { style: { textAlign: "center", padding: "80px 20px", color: R.textMuted, fontSize: 13, fontWeight: 500 } },
             "Selecione " + (mode === "atleta" ? "atletas" : mode === "grupo" ? "categorias" : "posições") + " para gerar o dashboard.")
         : (() => {
-            const targetEx = exercises.length === 1 ? exercises[0] : exercise;
-            const metricsData = METRICS.map(m => {
-              const series = buildSeries(m, targetEx);
+            // Função que computa metrics data pra um exercício específico
+            const computeMetricsForEx = (ex) => METRICS.map(m => {
+              const series = buildSeries(m, ex);
               let currentVal = null, deltaPct = null, sparklineData = [];
               const firstSeries = series[0];
               if (firstSeries && firstSeries.points.length > 0) {
@@ -5211,18 +5491,72 @@ function ReportsView({ athletes, snapshots }) {
               }
               return { metric: m, series, currentVal, deltaPct, sparklineData };
             });
+
+            const targetEx = exercises.length === 1 ? exercises[0] : exercises[0]; // fallback primeiro selecionado
+            const isMulti = exercises.length > 1;
+            const metricsData = computeMetricsForEx(targetEx);
             const primary = metricsData.find(md => md.metric.key === primaryMetric) || metricsData[0];
 
             // ─── OVERVIEW ───
             if (innerTab === "overview") {
-              const scopeLabel = mode === "atleta" ? (selected.length === 1 ? "atleta" : selected.length + " atletas")
+              const scopeLabel = mode === "atleta" ? (selected.length === 1 ? "1 atleta" : selected.length + " atletas")
                 : mode === "grupo" ? (selected.length === 1 ? selected[0] : selected.length + " categorias")
                 : (selected.length === 1 ? selected[0] : selected.length + " posições");
               const periodLabel = period === "30d" ? "Últimos 30 dias" : period === "90d" ? "Últimos 90 dias" : period === "temporada" ? "Temporada" : "Período custom";
+
+              // Renderiza bloco de KPIs pra 1 exercício
+              const renderKpiBlock = (ex, mData) => el("div", { key: ex, style: { display: "flex", flexDirection: "column", gap: 10 } },
+                // Título do exercício (só em multi)
+                isMulti && el("div", { style: { display: "flex", alignItems: "baseline", gap: 8, paddingBottom: 4, borderBottom: "2px solid " + R.text } },
+                  el("h3", { style: { fontSize: 14, fontWeight: 600, color: R.text, margin: 0, letterSpacing: "-.01em" } }, ex),
+                  el("span", { style: { fontSize: 10, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase", fontWeight: 500 } }, "métricas do período")
+                ),
+                el("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 } },
+                  ...mData.map(({ metric, currentVal, deltaPct, sparklineData }) => {
+                    const hasDelta = deltaPct != null;
+                    const isUp = hasDelta && deltaPct > 1;
+                    const isDown = hasDelta && deltaPct < -1;
+                    const deltaColor = isUp ? R.positive : isDown ? R.negative : R.neutral;
+                    const ctx = computeContext(metric);
+                    return el("div", { key: metric.key, onClick: () => {
+                      setPrimaryMetric(metric.key);
+                      setExercise(ex);
+                      setInnerTab("evolucao");
+                    }, style: {
+                      background: R.card, border: "1px solid " + R.border,
+                      borderRadius: 10, padding: isMulti ? "14px 16px" : "18px 20px", cursor: "pointer",
+                      transition: "all .15s ease", minHeight: isMulti ? 140 : 170,
+                      display: "flex", flexDirection: "column", justifyContent: "space-between"
+                    }},
+                      el("div", null,
+                        el("div", { style: { fontSize: 10, fontWeight: 500, letterSpacing: ".04em", textTransform: "uppercase", color: R.textMuted, marginBottom: 8 } },
+                          metric.label.replace(/\s*\([^)]*\)/, "")),
+                        el("div", { style: { display: "flex", alignItems: "baseline", gap: 5, marginBottom: 4 } },
+                          el("span", { style: {
+                            fontSize: isMulti ? 22 : 30, fontWeight: 600, color: R.text,
+                            letterSpacing: "-.02em", lineHeight: 1,
+                            fontVariantNumeric: "tabular-nums"
+                          }},
+                            currentVal != null ? (currentVal >= 100 ? currentVal.toFixed(0) : currentVal.toFixed(2)) : "—"),
+                          el("span", { style: { fontSize: 11, fontWeight: 400, color: R.textMuted } }, metric.unit)
+                        ),
+                        hasDelta && el("div", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 500, color: deltaColor, fontVariantNumeric: "tabular-nums" } },
+                          isUp ? Icon.ArrowUp(9, deltaColor) : isDown ? Icon.ArrowDown(9, deltaColor) : Icon.Minus(9, deltaColor),
+                          el("span", null, (deltaPct > 0 ? "+" : "") + deltaPct.toFixed(1) + "%")
+                        )
+                      ),
+                      sparklineData.length >= 2 && el("div", { style: { marginTop: 6, marginLeft: -4, marginRight: -4 } },
+                        el(Sparkline, { points: sparklineData, height: isMulti ? 26 : 34, positive: !isDown, color: isDown ? R.negative : R.positive })
+                      )
+                    );
+                  })
+                )
+              );
+
               return el("div", { style: { display: "flex", flexDirection: "column", gap: 20, maxWidth: 1200, margin: "0 auto" } },
-                // Header contextual (chip fino do que estou olhando)
+                // Header contextual
                 el("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "6px 14px", background: "#fff", border: "1px solid " + R.border, borderRadius: 999, alignSelf: "flex-start", fontSize: 11.5, fontWeight: 500, color: R.textSub } },
-                  el("span", { style: { fontWeight: 600, color: R.text } }, targetEx),
+                  el("span", { style: { fontWeight: 600, color: R.text } }, isMulti ? exercises.length + " exercícios" : targetEx),
                   el("span", { style: { color: R.textMuted } }, "·"),
                   el("span", null, scopeLabel),
                   el("span", { style: { color: R.textMuted } }, "·"),
@@ -5250,55 +5584,51 @@ function ReportsView({ athletes, snapshots }) {
                     })
                   )
                 ),
-                // KPI Cards (grandes, com espaço)
-                el("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12 } },
-                  ...metricsData.map(({ metric, currentVal, deltaPct, sparklineData }) => {
-                    const hasDelta = deltaPct != null;
-                    const isUp = hasDelta && deltaPct > 1;
-                    const isDown = hasDelta && deltaPct < -1;
-                    const deltaColor = isUp ? R.positive : isDown ? R.negative : R.neutral;
-                    const ctx = computeContext(metric);
-                    return el("div", { key: metric.key, onClick: () => { setPrimaryMetric(metric.key); setInnerTab("evolucao"); }, style: {
-                      background: R.card, border: "1px solid " + R.border,
-                      borderRadius: 10, padding: "18px 20px", cursor: "pointer",
-                      transition: "all .15s ease", minHeight: 170,
-                      display: "flex", flexDirection: "column", justifyContent: "space-between"
-                    }},
-                      el("div", null,
-                        el("div", { style: { fontSize: 10, fontWeight: 500, letterSpacing: ".04em", textTransform: "uppercase", color: R.textMuted, marginBottom: 10 } },
-                          metric.label.replace(/\s*\([^)]*\)/, "")),
-                        el("div", { style: { display: "flex", alignItems: "baseline", gap: 5, marginBottom: 5 } },
-                          el("span", { style: {
-                            fontSize: 30, fontWeight: 600, color: R.text,
-                            letterSpacing: "-.02em", lineHeight: 1,
-                            fontVariantNumeric: "tabular-nums"
-                          }},
-                            currentVal != null ? (currentVal >= 100 ? currentVal.toFixed(0) : currentVal.toFixed(2)) : "—"),
-                          el("span", { style: { fontSize: 12, fontWeight: 400, color: R.textMuted } }, metric.unit)
-                        ),
-                        hasDelta && el("div", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, color: deltaColor, fontVariantNumeric: "tabular-nums" } },
-                          isUp ? Icon.ArrowUp(10, deltaColor) : isDown ? Icon.ArrowDown(10, deltaColor) : Icon.Minus(10, deltaColor),
-                          el("span", null, (deltaPct > 0 ? "+" : "") + deltaPct.toFixed(1) + "% período")
-                        ),
-                        ctx.teamAvg != null && currentVal != null && el("div", { style: { fontSize: 10.5, color: R.textMuted, fontWeight: 400, marginTop: 4, fontVariantNumeric: "tabular-nums" } },
-                          "vs média time " + ctx.teamAvgStr)
-                      ),
-                      sparklineData.length >= 2 && el("div", { style: { marginTop: 8, marginLeft: -4, marginRight: -4 } },
-                        el(Sparkline, { points: sparklineData, height: 34, positive: !isDown, color: isDown ? R.negative : R.positive })
-                      )
-                    );
-                  })
-                ),
-                // Dica ao clicar
+                // KPI Blocks (1 por exercício)
+                ...exercises.map(ex => renderKpiBlock(ex, computeMetricsForEx(ex))),
+                // Dica
                 el("div", { style: { textAlign: "center", fontSize: 11, color: R.textMuted, fontStyle: "italic", padding: "8px 0" } },
-                  "Clique num KPI para ver a evolução detalhada")
+                  "Clique num KPI para ver a evolução detalhada desse exercício")
               );
             }
 
             // ─── EVOLUÇÃO ───
             if (innerTab === "evolucao") {
-              return el("div", { style: { display: "flex", flexDirection: "column", gap: 20, maxWidth: 1200, margin: "0 auto" } },
-                // Seletor de métrica compacto
+              // Renderiza 1 seção de gráfico por exercício
+              const renderChartSection = (ex) => {
+                const mData = computeMetricsForEx(ex);
+                const primEx = mData.find(md => md.metric.key === primaryMetric) || mData[0];
+                return el("div", { key: ex, style: {
+                  background: R.card, borderRadius: 10, padding: "22px 26px",
+                  border: "1px solid " + R.border
+                }},
+                  el("div", { style: { marginBottom: 14 } },
+                    el("div", { style: { display: "flex", alignItems: "baseline", gap: 10, marginBottom: 3 } },
+                      el("div", { style: { fontSize: 16, fontWeight: 600, color: R.text, letterSpacing: "-.01em" } }, primEx.metric.label),
+                      el("span", { style: { fontSize: 11, fontWeight: 500, color: R.textMuted, letterSpacing: ".06em", textTransform: "uppercase", padding: "2px 8px", background: "#F5F5F5", borderRadius: 4 } }, ex)
+                    ),
+                    el("div", { style: { fontSize: 11.5, color: R.textSub } }, primEx.metric.subtitle)
+                  ),
+                  (() => {
+                    const bench = buildBenchmark(primEx.metric, ex);
+                    const seriesWithBench = bench ? [...primEx.series, bench] : primEx.series;
+                    return el(LineChart, { series: seriesWithBench, height: isMulti ? 260 : 380, unit: primEx.metric.unit, showArea: true, showAnnotations: primEx.series.length === 1 && !bench });
+                  })(),
+                  // Legenda
+                  el("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid " + R.border, display: "flex", flexWrap: "wrap", gap: 12, fontSize: 11 } },
+                    ...primEx.series.map((s, si) => {
+                      const color = s.isBenchmark ? "#737373" : REPORT_COLORS[si % REPORT_COLORS.length];
+                      return el("span", { key: si, style: { display: "flex", alignItems: "center", gap: 5, color: R.textSub, fontWeight: 500 } },
+                        el("span", { style: { width: 8, height: 8, background: color, borderRadius: "50%" } }),
+                        s.name
+                      );
+                    })
+                  )
+                );
+              };
+
+              return el("div", { style: { display: "flex", flexDirection: "column", gap: 16, maxWidth: 1200, margin: "0 auto" } },
+                // Seletor de métrica
                 el("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
                   ...METRICS.map(m => el("button", { key: m.key, onClick: () => setPrimaryMetric(m.key), style: {
                     padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 500, cursor: "pointer",
@@ -5307,35 +5637,13 @@ function ReportsView({ athletes, snapshots }) {
                     color: m.key === primaryMetric ? "#fff" : R.textSub
                   }}, m.label.replace(/\s*\([^)]*\)/, "")))
                 ),
-                // Gráfico grande
-                el("div", { style: {
-                  background: R.card, borderRadius: 10, padding: "24px 28px",
-                  border: "1px solid " + R.border
-                }},
-                  el("div", { style: { marginBottom: 16 } },
-                    el("div", { style: { fontSize: 18, fontWeight: 600, color: R.text, letterSpacing: "-.01em", marginBottom: 3 } }, primary.metric.label),
-                    el("div", { style: { fontSize: 12, color: R.textSub, marginBottom: 10 } }, primary.metric.subtitle),
-                    el("div", { style: { fontSize: 11.5, color: R.textSub, lineHeight: 1.55, padding: "10px 14px", background: "#FAFAFA", borderRadius: 6, borderLeft: "3px solid " + R.text } },
-                      primary.metric.description)
-                  ),
-                  (() => {
-                    const bench = buildBenchmark(primary.metric);
-                    const seriesWithBench = bench ? [...primary.series, bench] : primary.series;
-                    return el(LineChart, { series: seriesWithBench, height: 380, unit: primary.metric.unit, showArea: true, showAnnotations: primary.series.length === 1 && !bench });
-                  })(),
-                  // Legenda
-                  el("div", { style: { marginTop: 14, paddingTop: 12, borderTop: "1px solid " + R.border, display: "flex", flexWrap: "wrap", gap: 14, fontSize: 11 } },
-                    ...primary.series.map((s, si) => {
-                      const color = REPORT_COLORS[si % REPORT_COLORS.length];
-                      return el("span", { key: si, style: { display: "flex", alignItems: "center", gap: 6, color: R.textSub, fontWeight: 500 } },
-                        el("span", { style: { width: 10, height: 10, background: color, borderRadius: "50%" } }),
-                        s.name
-                      );
-                    })
-                  )
-                ),
-                // Insight editável
-                (() => {
+                // Descrição da métrica (só em single)
+                !isMulti && el("div", { style: { fontSize: 11.5, color: R.textSub, lineHeight: 1.55, padding: "10px 14px", background: "#FAFAFA", borderRadius: 6, borderLeft: "3px solid " + R.text } },
+                  primary.metric.description),
+                // Gráfico(s) — 1 por exercício
+                ...exercises.map(renderChartSection),
+                // Insight editável (só em single)
+                !isMulti && (() => {
                   const autoInsight = generateInsight(primary.series, primary.metric, mode);
                   const insight = editedInsights[primary.metric.key] != null ? editedInsights[primary.metric.key] : autoInsight;
                   return el("div", { style: { background: R.card, borderRadius: 10, padding: "18px 22px", border: "1px solid " + R.border } },
@@ -5360,11 +5668,15 @@ function ReportsView({ athletes, snapshots }) {
 
             // ─── COMPARATIVO ───
             if (innerTab === "comparativo") {
+              const tables = exercises.map(ex => ({ ex, rows: buildComparisonForEx(ex) }));
+              const hasAnyData = tables.some(t => t.rows.length > 0);
               return el("div", { style: { display: "flex", flexDirection: "column", gap: 20, maxWidth: 1400, margin: "0 auto" } },
-                comparisonTableData.length === 0
+                !hasAnyData
                   ? el("div", { style: { textAlign: "center", padding: "60px 20px", color: R.textMuted, fontSize: 13 } },
                       "Sem dados para comparar. Selecione mais atletas ou mude o período.")
-                  : el(ComparisonTable, { rows: comparisonTableData, exercise: targetEx }),
+                  : el(React.Fragment, null, ...tables.map(({ ex, rows }) =>
+                      rows.length > 0 && el(ComparisonTable, { key: ex, rows, exercise: ex })
+                    )),
                 algorithmicAnalysis.length > 0 && el(AlgorithmicAnalysisBlock, { findings: algorithmicAnalysis })
               );
             }
