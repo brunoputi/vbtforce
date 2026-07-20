@@ -961,7 +961,19 @@ function parseCSV(text, regNames) {
           max_mpv: +maxMpv.toFixed(3),
           min_velocity: +minMpv.toFixed(3),
           body_weight_session: bwSessions.length ? +(bwSessions.reduce((s,v)=>s+v,0)/bwSessions.length).toFixed(1) : null,
-          max_load_session: Math.max(...loads)
+          max_load_session: Math.max(...loads),
+          // Dados rep-a-rep (para gráficos load-velocity e curvas de perfil individual)
+          sets_data: reps.map(r => ({
+            load: r.load,
+            mpv: r.mpv,
+            mean_power: r.meanPower,
+            peak_power: r.peakPower,
+            peak_power_rel: r.peakPowerRel,
+            mean_power_rel: r.meanPowerRel,
+            peak_velocity: r.peakVelocity,
+            mean_force: r.meanForce,
+            peak_force: r.peakForce
+          }))
         });
       });
     });
@@ -4192,6 +4204,80 @@ const REFERENCE_SOURCES = [
   "Sánchez-Medina, L. & González-Badillo, J.J. (2010). Velocity as indicator of neuromuscular fatigue."
 ];
 
+// Curvas load-velocity de referência (%1RM × MPV esperada)
+// Só existem estabelecidas pra Back Squat e Bench Press. Outros exercícios usam só
+// a regressão do próprio atleta como comparativo.
+const LOAD_VELOCITY_CURVES = {
+  "Back Squat": {
+    // Sánchez-Medina & González-Badillo 2010, full squat
+    points: [
+      { pct: 40, mpv: 1.51 }, { pct: 50, mpv: 1.32 }, { pct: 60, mpv: 1.12 },
+      { pct: 70, mpv: 0.92 }, { pct: 80, mpv: 0.72 }, { pct: 90, mpv: 0.52 },
+      { pct: 100, mpv: 0.32 }
+    ],
+    source: "Sánchez-Medina & González-Badillo 2010"
+  },
+  "Bench Press": {
+    // Sánchez-Medina et al 2014
+    points: [
+      { pct: 40, mpv: 1.35 }, { pct: 50, mpv: 1.15 }, { pct: 60, mpv: 0.95 },
+      { pct: 70, mpv: 0.75 }, { pct: 80, mpv: 0.55 }, { pct: 90, mpv: 0.35 },
+      { pct: 100, mpv: 0.16 }
+    ],
+    source: "Sánchez-Medina et al. 2014"
+  }
+};
+
+// Extrai pontos (%1RM, MPV) de uma lista de snapshots com sets_data
+function extractLoadVelocityPoints(snaps) {
+  const pts = [];
+  snaps.forEach(s => {
+    if (!s.sets_data || !Array.isArray(s.sets_data) || !s.e1rm || s.e1rm < 20) return;
+    s.sets_data.forEach(rep => {
+      if (rep.load == null || rep.mpv == null || rep.load < 10 || rep.mpv < 0.15) return;
+      const pct = (rep.load / s.e1rm) * 100;
+      if (pct < 20 || pct > 120) return; // filtra outliers extremos (dado ruim de e1rm)
+      pts.push({
+        date: s.session_date,
+        pct: +pct.toFixed(1),
+        load: rep.load,
+        mpv: +rep.mpv.toFixed(3)
+      });
+    });
+  });
+  return pts.sort((a,b) => a.date.localeCompare(b.date));
+}
+
+// Regressão linear simples y = a + b*x. Retorna { slope, intercept } ou null.
+function linearRegression(pts, xKey, yKey) {
+  if (!pts || pts.length < 2) return null;
+  const n = pts.length;
+  let sx = 0, sy = 0;
+  for (const p of pts) { sx += p[xKey]; sy += p[yKey]; }
+  const mx = sx / n, my = sy / n;
+  let num = 0, den = 0;
+  for (const p of pts) {
+    const dx = p[xKey] - mx;
+    num += dx * (p[yKey] - my);
+    den += dx * dx;
+  }
+  if (den === 0) return null;
+  const slope = num / den;
+  return { slope, intercept: my - slope * mx };
+}
+
+// Divide pontos em duas metades por sessão (não por ponto): primeiras N/2 datas vs últimas N/2
+function splitByHalf(pts) {
+  const dates = Array.from(new Set(pts.map(p => p.date))).sort();
+  if (dates.length < 2) return { early: [], recent: pts };
+  const half = Math.floor(dates.length / 2);
+  const earlyDates = new Set(dates.slice(0, half));
+  return {
+    early: pts.filter(p => earlyDates.has(p.date)),
+    recent: pts.filter(p => !earlyDates.has(p.date))
+  };
+}
+
 // Retorna zona (abaixo/médio/alto/elite) + cor + fonte pra um valor
 function getReferenceZone(metricKey, exercise, value) {
   const ref = REFERENCE_RANGES[metricKey] && REFERENCE_RANGES[metricKey][exercise];
@@ -4240,10 +4326,12 @@ const METRICS = [
   },
   {
     key: "peak_velocity",
-    label: "Velocidade Pico (m/s)",
-    subtitle: "Velocidade máxima na sessão",
-    description: "Maior velocidade concêntrica registrada. Alta correlação com potência e boa métrica para intent balístico. Serve como indicador de estado neuromuscular.",
+    label: "Perfil Load-Velocity",
+    label_kpi: "Velocidade Pico (m/s)",
+    subtitle: "Curva velocidade × %1RM (evolução do perfil neuromuscular)",
+    description: "Cada ponto é uma repetição (%1RM da sessão × MPV medida). Sessões antigas em cinza, recentes em preto. As linhas mostram a curva média de cada período — quando a linha preta fica acima da cinza em cargas iguais, houve ganho real de força-velocidade. A linha vermelha tracejada é a curva de referência da literatura (quando disponível).",
     unit: "m/s",
+    chart_type: "load_velocity",
     getValue: (snap) => snap.peak_velocity || snap.max_mpv,
     aggregate: "max"
   },
@@ -4280,6 +4368,129 @@ function PremiumTooltip({ active, payload, label, unit }) {
         (typeof p.value === "number" ? (p.value >= 100 ? p.value.toFixed(0) : p.value.toFixed(2)) : p.value) + (unit ? " " + unit : "")
       )
     ))
+  );
+}
+
+// Helper: transforma regressão em segmento de 2 pontos pra plotar linha
+function segmentFromRegression(reg, xMin, xMax) {
+  if (!reg) return null;
+  return [
+    { pct: xMin, mpv: +(reg.intercept + reg.slope * xMin).toFixed(3) },
+    { pct: xMax, mpv: +(reg.intercept + reg.slope * xMax).toFixed(3) }
+  ];
+}
+
+// LoadVelocityScatter — scatter %1RM × MPV com duas regressões (primeiras vs últimas)
+// + curva teórica de referência quando disponível (Back Squat, Bench Press)
+function LoadVelocityScatter({ snaps, exercise, height }) {
+  const el = React.createElement;
+  const pts = extractLoadVelocityPoints(snaps || []);
+  const H = height || 380;
+
+  if (pts.length < 4) {
+    return el("div", { style: {
+      height: H, display: "flex", alignItems: "center", justifyContent: "center",
+      background: "#FAFAFA", borderRadius: 8, border: "1px dashed #E5E5E5",
+      color: "#737373", fontSize: 12, textAlign: "center", padding: "0 24px", lineHeight: 1.5
+    }},
+      el("div", null,
+        el("div", { style: { fontWeight: 600, fontSize: 13, color: "#525252", marginBottom: 4 } }, "Sem dados set-a-set suficientes"),
+        el("div", null, "O gráfico Perfil Load-Velocity precisa de sessões com sets_data no banco (importadas via v112+). Sessões antigas ficam sem esse detalhe até serem reimportadas.")
+      )
+    );
+  }
+
+  const { early, recent } = splitByHalf(pts);
+  const regEarly = linearRegression(early, "pct", "mpv");
+  const regRecent = linearRegression(recent, "pct", "mpv");
+
+  // Domínio X baseado nos dados reais, arredondado
+  const xMin = Math.max(20, Math.floor(Math.min(...pts.map(p => p.pct)) / 10) * 10);
+  const xMax = Math.min(120, Math.ceil(Math.max(...pts.map(p => p.pct)) / 10) * 10);
+  const yMax = Math.max(...pts.map(p => p.mpv)) * 1.1;
+  const yMin = Math.max(0, Math.min(...pts.map(p => p.mpv)) * 0.9);
+
+  const regEarlyLine = segmentFromRegression(regEarly, xMin, xMax);
+  const regRecentLine = segmentFromRegression(regRecent, xMin, xMax);
+  const curve = LOAD_VELOCITY_CURVES[exercise];
+  const curvePts = curve ? curve.points.filter(p => p.pct >= xMin && p.pct <= xMax) : null;
+
+  // Tooltip customizado
+  const scatterTooltip = ({ active, payload }) => {
+    if (!active || !payload || !payload.length) return null;
+    const d = payload[0].payload;
+    return el("div", { style: { background: "#0A0A0B", color: "#fff", padding: "8px 12px", borderRadius: 6, fontSize: 11, fontFeatureSettings: '"tnum"' } },
+      d.date && el("div", { style: { color: "#A3A3A3", fontSize: 10, marginBottom: 3 } },
+        new Date(d.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })),
+      d.load != null && el("div", null, "Carga: ", el("strong", null, d.load + " kg"), " (", d.pct.toFixed(0), "% 1RM)"),
+      d.mpv != null && el("div", null, "MPV: ", el("strong", null, d.mpv.toFixed(2) + " m/s"))
+    );
+  };
+
+  return el("div", { style: { position: "relative" } },
+    el(RC.ResponsiveContainer, { width: "100%", height: H },
+      el(RC.ComposedChart, { margin: { top: 20, right: 30, left: 10, bottom: 40 } },
+        el(RC.CartesianGrid, { stroke: "#EEEEEE", vertical: false }),
+        el(RC.XAxis, {
+          type: "number", dataKey: "pct", domain: [xMin, xMax], allowDuplicatedCategory: false,
+          tick: { fontSize: 11, fill: "#737373" }, tickLine: false, axisLine: { stroke: "#D4D4D4" },
+          label: { value: "% do 1RM", position: "insideBottom", offset: -20, fontSize: 12, fill: "#525252" },
+          ticks: [xMin, ...Array.from({length: Math.floor((xMax-xMin)/10)}, (_,i) => xMin + (i+1)*10)]
+        }),
+        el(RC.YAxis, {
+          type: "number", dataKey: "mpv", domain: [yMin, yMax],
+          tick: { fontSize: 11, fill: "#737373" }, tickLine: false, axisLine: { stroke: "#D4D4D4" },
+          label: { value: "MPV (m/s)", angle: -90, position: "insideLeft", fontSize: 12, fill: "#525252", offset: 15 }
+        }),
+        el(RC.Tooltip, { content: scatterTooltip, cursor: { strokeDasharray: "3 3" } }),
+        // Pontos primeiras sessões
+        early.length > 0 && el(RC.Scatter, { name: "Primeiras sessões", data: early, fill: "#CBD5E1", shape: "circle" }),
+        // Pontos últimas sessões
+        recent.length > 0 && el(RC.Scatter, { name: "Últimas sessões", data: recent, fill: "#0A0A0B", shape: "circle" }),
+        // Regressão early
+        regEarlyLine && el(RC.Line, { data: regEarlyLine, type: "linear", dataKey: "mpv", stroke: "#94A3B8", strokeWidth: 2, dot: false, activeDot: false, isAnimationActive: false, name: "Regressão inicial" }),
+        // Regressão recent
+        regRecentLine && el(RC.Line, { data: regRecentLine, type: "linear", dataKey: "mpv", stroke: "#0A0A0B", strokeWidth: 2.5, dot: false, activeDot: false, isAnimationActive: false, name: "Regressão atual" }),
+        // Curva teórica (só Back Squat / Bench Press)
+        curvePts && el(RC.Line, { data: curvePts, type: "monotone", dataKey: "mpv", stroke: "#EF4444", strokeWidth: 1.5, strokeDasharray: "4 4", dot: false, activeDot: false, isAnimationActive: false, name: "Curva referência" })
+      )
+    ),
+    // Legenda customizada — Recharts Legend fica meio bagunçado com Composed
+    el("div", { style: { marginTop: 10, display: "flex", flexWrap: "wrap", gap: 16, fontSize: 11, color: "#525252" } },
+      el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
+        el("span", { style: { width: 8, height: 8, borderRadius: "50%", background: "#CBD5E1", display: "inline-block" } }),
+        el("span", null, "Primeiras sessões (n=" + new Set(early.map(p=>p.date)).size + ")")),
+      el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
+        el("span", { style: { width: 8, height: 8, borderRadius: "50%", background: "#0A0A0B", display: "inline-block" } }),
+        el("span", null, "Últimas sessões (n=" + new Set(recent.map(p=>p.date)).size + ")")),
+      regEarlyLine && el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
+        el("span", { style: { width: 16, height: 2, background: "#94A3B8", display: "inline-block" } }),
+        el("span", null, "Regressão inicial")),
+      regRecentLine && el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
+        el("span", { style: { width: 16, height: 2.5, background: "#0A0A0B", display: "inline-block" } }),
+        el("span", null, "Regressão atual")),
+      curvePts && el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
+        el("span", { style: { width: 16, height: 2, background: "#EF4444", display: "inline-block", borderTop: "2px dashed #EF4444" } }),
+        el("span", null, curve.source))
+    ),
+    // Interpretação automática se as duas regressões existem
+    regEarly && regRecent && el("div", { style: { marginTop: 10, padding: "10px 12px", background: "#FAFAFA", borderLeft: "3px solid #0A0A0B", fontSize: 11, color: "#525252", lineHeight: 1.5 } },
+      (() => {
+        // Avalia diferença de MPV na carga média entre os dois períodos
+        const midPct = (xMin + xMax) / 2;
+        const mpvEarly = regEarly.intercept + regEarly.slope * midPct;
+        const mpvRecent = regRecent.intercept + regRecent.slope * midPct;
+        const diff = mpvRecent - mpvEarly;
+        const pctDiff = mpvEarly > 0 ? (diff / mpvEarly) * 100 : 0;
+        const direction = diff > 0.03 ? "melhora" : diff < -0.03 ? "queda" : "estabilidade";
+        const msg = direction === "melhora"
+          ? "A " + midPct.toFixed(0) + "% do 1RM, a MPV subiu de " + mpvEarly.toFixed(2) + " para " + mpvRecent.toFixed(2) + " m/s (+" + pctDiff.toFixed(1) + "%). Ganho real de força-velocidade — mesma carga movida mais rápido."
+          : direction === "queda"
+          ? "A " + midPct.toFixed(0) + "% do 1RM, a MPV caiu de " + mpvEarly.toFixed(2) + " para " + mpvRecent.toFixed(2) + " m/s (" + pctDiff.toFixed(1) + "%). Perda de força-velocidade ou fadiga acumulada — mesma carga movida mais devagar."
+          : "Perfil estável entre os dois períodos. Sem mudança relevante em MPV nas cargas testadas.";
+        return msg;
+      })()
+    )
   );
 }
 
@@ -4391,18 +4602,15 @@ function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresh
         y: avgValue, stroke: "#A3A3A3", strokeDasharray: "3 3", strokeWidth: 1,
         label: { value: "média " + avgValue.toFixed(avgValue >= 100 ? 0 : 2), position: "insideTopRight", fontSize: 9, fill: "#737373", fontWeight: 500 }
       }),
-      // Linhas de zona (faixas da literatura) — mesmas usadas no PDF
+      // Linhas de zona (faixas da literatura) — sem label na linha (fica na legenda embaixo)
       zoneThresholds && el(RC.ReferenceLine, {
-        y: zoneThresholds[0], stroke: "#F59E0B", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7,
-        label: { value: "Médio " + zoneThresholds[0], position: "insideBottomLeft", fontSize: 9, fill: "#B45309", fontWeight: 600 }
+        y: zoneThresholds[0], stroke: "#F59E0B", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7
       }),
       zoneThresholds && el(RC.ReferenceLine, {
-        y: zoneThresholds[1], stroke: "#3B82F6", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7,
-        label: { value: "Alto " + zoneThresholds[1], position: "insideBottomLeft", fontSize: 9, fill: "#1E40AF", fontWeight: 600 }
+        y: zoneThresholds[1], stroke: "#3B82F6", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7
       }),
       zoneThresholds && el(RC.ReferenceLine, {
-        y: zoneThresholds[2], stroke: "#10B981", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7,
-        label: { value: "Elite " + zoneThresholds[2], position: "insideBottomLeft", fontSize: 9, fill: "#047857", fontWeight: 600 }
+        y: zoneThresholds[2], stroke: "#10B981", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7
       }),
       // Marcador de recorde
       recordPoint && el(RC.ReferenceDot, {
@@ -4530,7 +4738,7 @@ function ComparisonTable({ rows, exercise }) {
               borderBottom: "1px solid " + R.border,
               cursor: "pointer", whiteSpace: "nowrap"
             }},
-              m.label.replace(/\s*\([^)]*\)/, ""),
+              (m.label_kpi || m.label).replace(/\s*\([^)]*\)/, ""),
               sortBy === m.key && el("span", { style: { marginLeft: 4, fontSize: 9, color: R.text } }, sortDir === "desc" ? "↓" : "↑")
             ))
           )
@@ -4626,6 +4834,52 @@ function AlgorithmicAnalysisBlock({ findings }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // PDF LAYOUT — Renderiza N páginas HTML premium (dinâmico por métricas × exercícios)
 // ═══════════════════════════════════════════════════════════════════════════
+// Versão do LoadVelocityScatter otimizada para captura em PDF (dimensões fixas, sem animação)
+function PdfLoadVelocityScatter({ snaps, exercise }) {
+  const el = React.createElement;
+  const RC = window.Recharts;
+  if (!RC) return null;
+  const pts = extractLoadVelocityPoints(snaps || []);
+  if (pts.length < 4) {
+    return el("div", { style: { height: 220, display: "flex", alignItems: "center", justifyContent: "center", background: "#FAFAFA", borderRadius: 4, border: "1px dashed #E5E5E5", color: "#737373", fontSize: 10.5, padding: "0 24px", textAlign: "center" } },
+      "Sem dados set-a-set suficientes para o perfil load-velocity. Reimporte CSVs históricos para popular sets_data."
+    );
+  }
+  const { early, recent } = splitByHalf(pts);
+  const regEarly = linearRegression(early, "pct", "mpv");
+  const regRecent = linearRegression(recent, "pct", "mpv");
+  const xMin = Math.max(20, Math.floor(Math.min(...pts.map(p => p.pct)) / 10) * 10);
+  const xMax = Math.min(120, Math.ceil(Math.max(...pts.map(p => p.pct)) / 10) * 10);
+  const yMax = Math.max(...pts.map(p => p.mpv)) * 1.1;
+  const yMin = Math.max(0, Math.min(...pts.map(p => p.mpv)) * 0.9);
+  const regEarlyLine = segmentFromRegression(regEarly, xMin, xMax);
+  const regRecentLine = segmentFromRegression(regRecent, xMin, xMax);
+  const curve = LOAD_VELOCITY_CURVES[exercise];
+  const curvePts = curve ? curve.points.filter(p => p.pct >= xMin && p.pct <= xMax) : null;
+
+  return el(RC.ResponsiveContainer, { width: "100%", height: 250 },
+    el(RC.ComposedChart, { margin: { top: 10, right: 15, left: 5, bottom: 30 } },
+      el(RC.CartesianGrid, { stroke: "#EEEEEE", vertical: false }),
+      el(RC.XAxis, {
+        type: "number", dataKey: "pct", domain: [xMin, xMax],
+        tick: { fontSize: 10, fill: "#737373" }, tickLine: false, axisLine: { stroke: "#D4D4D4" },
+        label: { value: "% do 1RM", position: "insideBottom", offset: -15, fontSize: 10, fill: "#525252" }
+      }),
+      el(RC.YAxis, {
+        type: "number", dataKey: "mpv", domain: [yMin, yMax],
+        tick: { fontSize: 10, fill: "#737373" }, tickLine: false, axisLine: { stroke: "#D4D4D4" },
+        label: { value: "MPV (m/s)", angle: -90, position: "insideLeft", fontSize: 10, fill: "#525252", offset: 15 }
+      }),
+      early.length > 0 && el(RC.Scatter, { data: early, fill: "#CBD5E1", shape: "circle", isAnimationActive: false }),
+      recent.length > 0 && el(RC.Scatter, { data: recent, fill: "#0A0A0B", shape: "circle", isAnimationActive: false }),
+      regEarlyLine && el(RC.Line, { data: regEarlyLine, type: "linear", dataKey: "mpv", stroke: "#94A3B8", strokeWidth: 1.8, dot: false, activeDot: false, isAnimationActive: false }),
+      regRecentLine && el(RC.Line, { data: regRecentLine, type: "linear", dataKey: "mpv", stroke: "#0A0A0B", strokeWidth: 2, dot: false, activeDot: false, isAnimationActive: false }),
+      curvePts && el(RC.Line, { data: curvePts, type: "monotone", dataKey: "mpv", stroke: "#EF4444", strokeWidth: 1.3, strokeDasharray: "4 4", dot: false, activeDot: false, isAnimationActive: false })
+    )
+  );
+}
+
+
 function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, zoneThresholds }) {
   const el = React.createElement;
   const RC = window.Recharts;
@@ -4676,18 +4930,15 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
         y: referenceValue, stroke: "#0A0A0B", strokeWidth: 1.3, strokeDasharray: "5 3",
         label: { value: (referenceLabel || "Média") + " " + (referenceValue >= 100 ? referenceValue.toFixed(0) : referenceValue.toFixed(2)), position: "insideTopRight", fontSize: 9.5, fill: "#0A0A0B", fontWeight: 700 }
       }),
-      // Linhas de zona (thresholds da literatura) — mais visíveis
+      // Linhas de zona (thresholds da literatura) — sem label na linha (fica na legenda embaixo do gráfico)
       zoneThresholds && el(RC.ReferenceLine, {
-        y: zoneThresholds[0], stroke: "#F59E0B", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7,
-        label: { value: "Médio " + zoneThresholds[0], position: "left", fontSize: 8, fill: "#B45309", fontWeight: 600 }
+        y: zoneThresholds[0], stroke: "#F59E0B", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7
       }),
       zoneThresholds && el(RC.ReferenceLine, {
-        y: zoneThresholds[1], stroke: "#3B82F6", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7,
-        label: { value: "Alto " + zoneThresholds[1], position: "left", fontSize: 8, fill: "#1E40AF", fontWeight: 600 }
+        y: zoneThresholds[1], stroke: "#3B82F6", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7
       }),
       zoneThresholds && el(RC.ReferenceLine, {
-        y: zoneThresholds[2], stroke: "#10B981", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7,
-        label: { value: "Elite " + zoneThresholds[2], position: "left", fontSize: 8, fill: "#047857", fontWeight: 600 }
+        y: zoneThresholds[2], stroke: "#10B981", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7
       }),
       ...series.map((s, i) => {
         const color = s.isBenchmark ? "#737373" : REPORT_COLORS_PDF[i % REPORT_COLORS_PDF.length];
@@ -4802,7 +5053,7 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
             const zone = getReferenceZone(md.metric.key, exBlock.exercise, md.currentVal);
             return el("div", { key: md.metric.key, style: { padding: "10px 12px", background: "#FAFAFA", borderRadius: 6, position: "relative" } },
               el("div", { style: { fontSize: 8, letterSpacing: ".06em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 6, minHeight: 18, lineHeight: 1.2 } },
-                md.metric.label.replace(/\s*\([^)]*\)/, "")),
+                (md.metric.label_kpi || md.metric.label).replace(/\s*\([^)]*\)/, "")),
               el("div", { style: { display: "flex", alignItems: "baseline", gap: 3, marginBottom: 4 } },
                 el("span", { style: { fontSize: 17, fontWeight: 600, letterSpacing: "-.02em", color: "#0A0A0B", lineHeight: 1 } },
                   md.currentVal != null ? (md.currentVal >= 100 ? md.currentVal.toFixed(0) : md.currentVal.toFixed(2)) : "—"),
@@ -4865,15 +5116,51 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
             numCharts > 1 && el("div", { style: { fontSize: 11, fontWeight: 600, color: "#0A0A0B", marginBottom: 6, letterSpacing: "-.01em", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
               el("span", { style: { padding: "2px 8px", background: "#0A0A0B", color: "#fff", borderRadius: 3, fontSize: 9, letterSpacing: ".06em", textTransform: "uppercase" } }, c.exercise),
               c.referenceValue != null && el("span", { style: { fontSize: 9.5, color: "#525252", fontWeight: 500 } },
-                (mode === "posicao" ? "média posição: " : mode === "grupo" ? "média categoria: " : "média time: ") + (c.referenceValue >= 100 ? c.referenceValue.toFixed(0) : c.referenceValue.toFixed(2)) + " " + mp.unit)
+                (meta.mode === "posicao" ? "média posição: " : meta.mode === "grupo" ? "média categoria: " : "média time: ") + (c.referenceValue >= 100 ? c.referenceValue.toFixed(0) : c.referenceValue.toFixed(2)) + " " + mp.unit)
             ),
-            el(PdfChartMini, {
-              series: c.series, unit: mp.unit,
-              referenceValue: c.referenceValue,
-              referenceLabel: c.referenceLabel,
-              zoneThresholds: c.zoneThresholds
-            }),
-            c.referenceSource && el("div", { style: { fontSize: 8, color: "#A3A3A3", marginTop: 3, fontStyle: "italic" } }, "Referências: " + c.referenceSource)
+            (mp.chart_type === "load_velocity")
+              ? el(PdfLoadVelocityScatter, { snaps: c.scatterSnaps, exercise: c.exercise })
+              : el(PdfChartMini, {
+                  series: c.series, unit: mp.unit,
+                  referenceValue: c.referenceValue,
+                  referenceLabel: c.referenceLabel,
+                  zoneThresholds: c.zoneThresholds
+                }),
+            // Legenda de zonas (com valores) — abaixo do gráfico, sem sobreposição
+            (mp.chart_type !== "load_velocity") && c.zoneThresholds && el("div", { style: { marginTop: 6, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, fontSize: 9, color: "#525252" } },
+              el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                el("span", { style: { width: 8, height: 2, background: "#EF4444", display: "inline-block", borderRadius: 1 } }),
+                el("span", null, "Abaixo <" + c.zoneThresholds[0])),
+              el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                el("span", { style: { width: 8, height: 2, background: "#F59E0B", display: "inline-block", borderRadius: 1 } }),
+                el("span", null, "Médio " + c.zoneThresholds[0] + "–" + c.zoneThresholds[1])),
+              el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                el("span", { style: { width: 8, height: 2, background: "#3B82F6", display: "inline-block", borderRadius: 1 } }),
+                el("span", null, "Alto " + c.zoneThresholds[1] + "–" + c.zoneThresholds[2])),
+              el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                el("span", { style: { width: 8, height: 2, background: "#10B981", display: "inline-block", borderRadius: 1 } }),
+                el("span", null, "Elite ≥" + c.zoneThresholds[2])),
+              el("span", { style: { color: "#A3A3A3", fontSize: 8.5 } }, mp.unit)
+            ),
+            // Legenda específica do scatter Load-Velocity
+            (mp.chart_type === "load_velocity") && c.scatterSnaps && c.scatterSnaps.some(s => s.sets_data) && el("div", { style: { marginTop: 6, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, fontSize: 9, color: "#525252" } },
+              el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                el("span", { style: { width: 7, height: 7, borderRadius: "50%", background: "#CBD5E1", display: "inline-block" } }),
+                el("span", null, "Primeiras sessões")),
+              el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                el("span", { style: { width: 7, height: 7, borderRadius: "50%", background: "#0A0A0B", display: "inline-block" } }),
+                el("span", null, "Últimas sessões")),
+              el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                el("span", { style: { width: 14, height: 1.8, background: "#94A3B8", display: "inline-block" } }),
+                el("span", null, "Regressão inicial")),
+              el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                el("span", { style: { width: 14, height: 2, background: "#0A0A0B", display: "inline-block" } }),
+                el("span", null, "Regressão atual")),
+              LOAD_VELOCITY_CURVES[c.exercise] && el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                el("span", { style: { width: 14, height: 1.5, borderTop: "1.5px dashed #EF4444", display: "inline-block" } }),
+                el("span", null, LOAD_VELOCITY_CURVES[c.exercise].source))
+            ),
+            c.referenceSource && (mp.chart_type !== "load_velocity") && el("div", { style: { fontSize: 8, color: "#A3A3A3", marginTop: 3, fontStyle: "italic" } }, "Referências: " + c.referenceSource)
           ))
         )
       )
@@ -5450,12 +5737,13 @@ function ReportsView({ athletes, snapshots }) {
         subtitle: m.subtitle,
         description: m.description,
         unit: m.unit,
+        chart_type: m.chart_type || "line",
         chartsByEx: exercises.map(ex => {
           const s = buildSeries(m, ex);
           const bench = buildBenchmark(m, ex);
           const groupAvg = computeGroupAvg(m, ex);
           const refRange = REFERENCE_RANGES[m.key] && REFERENCE_RANGES[m.key][ex];
-          return {
+          const base = {
             exercise: ex,
             series: bench ? [...s, bench] : s,
             referenceValue: groupAvg,
@@ -5463,6 +5751,24 @@ function ReportsView({ athletes, snapshots }) {
             zoneThresholds: refRange ? refRange.thresholds : null,
             referenceSource: refRange ? refRange.source : null
           };
+          // Para métricas do tipo load_velocity, anexa os snapshots do exercício no período
+          if (m.chart_type === "load_velocity") {
+            const [dMin, dMax] = dateRange;
+            let athIds = [];
+            if (mode === "posicao") {
+              selected.forEach(pos => activeAthletes.filter(a => a.position === pos).forEach(a => athIds.push(a.id)));
+            } else if (mode === "grupo") {
+              selected.forEach(cat => activeAthletes.filter(a => (a.categories || []).includes(cat)).forEach(a => athIds.push(a.id)));
+            } else {
+              const ath = activeAthletes.find(a => a.id === selected[0]);
+              if (ath) athIds.push(ath.id);
+            }
+            const idSet = new Set(athIds);
+            base.scatterSnaps = snapshots.filter(sn =>
+              sn.exercise === ex && sn.session_date >= dMin && sn.session_date <= dMax && idSet.has(sn.athlete_id)
+            );
+          }
+          return base;
         })
       }));
 
@@ -5518,7 +5824,7 @@ function ReportsView({ athletes, snapshots }) {
         return grouped;
       })();
 
-      const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx, kpisPerExercise, comparisonPerExercise };
+      const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx, kpisPerExercise, comparisonPerExercise, mode };
 
       // Cria container oculto e renderiza PdfLayout
       // NOTA: usa left:0 + z-index:-999 (sem opacity:0!) pra Recharts poder medir dimensões.
@@ -5813,7 +6119,7 @@ function ReportsView({ athletes, snapshots }) {
                     }},
                       el("div", null,
                         el("div", { style: { fontSize: 10, fontWeight: 500, letterSpacing: ".04em", textTransform: "uppercase", color: R.textMuted, marginBottom: 8 } },
-                          metric.label.replace(/\s*\([^)]*\)/, "")),
+                          (metric.label_kpi || metric.label).replace(/\s*\([^)]*\)/, "")),
                         el("div", { style: { display: "flex", alignItems: "baseline", gap: 5, marginBottom: 4 } },
                           el("span", { style: {
                             fontSize: isMulti ? 22 : 30, fontWeight: 600, color: R.text,
@@ -5893,6 +6199,24 @@ function ReportsView({ athletes, snapshots }) {
                     el("div", { style: { fontSize: 11.5, color: R.textSub } }, primEx.metric.subtitle)
                   ),
                   (() => {
+                    // Branch: métrica com chart_type=load_velocity usa o scatter
+                    if (primEx.metric.chart_type === "load_velocity") {
+                      const [dMin, dMax] = dateRange;
+                      let athIds = [];
+                      if (mode === "posicao") {
+                        selected.forEach(pos => activeAthletes.filter(a => a.position === pos).forEach(a => athIds.push(a.id)));
+                      } else if (mode === "grupo") {
+                        selected.forEach(cat => activeAthletes.filter(a => (a.categories || []).includes(cat)).forEach(a => athIds.push(a.id)));
+                      } else {
+                        const ath = activeAthletes.find(a => a.id === selected[0]);
+                        if (ath) athIds.push(ath.id);
+                      }
+                      const idSet = new Set(athIds);
+                      const scatterSnaps = snapshots.filter(sn =>
+                        sn.exercise === ex && sn.session_date >= dMin && sn.session_date <= dMax && idSet.has(sn.athlete_id)
+                      );
+                      return el(LoadVelocityScatter, { snaps: scatterSnaps, exercise: ex, height: isMulti ? 300 : 400 });
+                    }
                     const bench = buildBenchmark(primEx.metric, ex);
                     const seriesWithBench = bench ? [...primEx.series, bench] : primEx.series;
                     const refRange = REFERENCE_RANGES[primEx.metric.key] && REFERENCE_RANGES[primEx.metric.key][ex];
@@ -5902,6 +6226,21 @@ function ReportsView({ athletes, snapshots }) {
                         showAnnotations: primEx.series.length === 1 && !bench,
                         zoneThresholds: refRange ? refRange.thresholds : null
                       }),
+                      refRange && el("div", { style: { marginTop: 8, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, fontSize: 10.5, color: R.textSub } },
+                        el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
+                          el("span", { style: { width: 10, height: 2, background: "#EF4444", display: "inline-block", borderRadius: 1 } }),
+                          el("span", null, "Abaixo <" + refRange.thresholds[0])),
+                        el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
+                          el("span", { style: { width: 10, height: 2, background: "#F59E0B", display: "inline-block", borderRadius: 1 } }),
+                          el("span", null, "Médio " + refRange.thresholds[0] + "–" + refRange.thresholds[1])),
+                        el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
+                          el("span", { style: { width: 10, height: 2, background: "#3B82F6", display: "inline-block", borderRadius: 1 } }),
+                          el("span", null, "Alto " + refRange.thresholds[1] + "–" + refRange.thresholds[2])),
+                        el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
+                          el("span", { style: { width: 10, height: 2, background: "#10B981", display: "inline-block", borderRadius: 1 } }),
+                          el("span", null, "Elite ≥" + refRange.thresholds[2])),
+                        el("span", { style: { color: R.textMuted, fontSize: 10 } }, primEx.metric.unit)
+                      ),
                       refRange && el("div", { style: { fontSize: 9.5, color: R.textMuted, fontStyle: "italic", marginTop: 4 } }, "Referências: " + refRange.source)
                     );
                   })(),
@@ -5926,7 +6265,7 @@ function ReportsView({ athletes, snapshots }) {
                     border: "1px solid " + (m.key === primaryMetric ? R.text : R.border),
                     background: m.key === primaryMetric ? R.text : "#fff",
                     color: m.key === primaryMetric ? "#fff" : R.textSub
-                  }}, m.label.replace(/\s*\([^)]*\)/, "")))
+                  }}, (m.label_kpi || m.label).replace(/\s*\([^)]*\)/, "")))
                 ),
                 // Descrição da métrica (só em single)
                 !isMulti && el("div", { style: { fontSize: 11.5, color: R.textSub, lineHeight: 1.55, padding: "10px 14px", background: "#FAFAFA", borderRadius: 6, borderLeft: "3px solid " + R.text } },
@@ -6271,7 +6610,8 @@ function App() {
             peak_velocity: s.peak_velocity,
             body_weight_session: s.body_weight_session,
             min_velocity: s.min_velocity,
-            max_load_session: s.max_load_session
+            max_load_session: s.max_load_session,
+            sets_data: s.sets_data
           }, "athlete_id,exercise,session_date");
           snapOk++;
           datesSet.add(s.session_date);
