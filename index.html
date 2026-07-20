@@ -4658,15 +4658,24 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
         axisLine: false, tickLine: false, tickMargin: 4, width: 36,
         domain: ["dataMin - 5%", "dataMax + 5%"]
       }),
-      // Linha de referência - média do grupo (tracejada cinza escuro)
+      // Linha de referência - média do grupo (tracejada preta com label)
       referenceValue != null && el(RC.ReferenceLine, {
-        y: referenceValue, stroke: "#0A0A0B", strokeWidth: 1, strokeDasharray: "4 4",
-        label: { value: (referenceLabel || "Média") + " " + (referenceValue >= 100 ? referenceValue.toFixed(0) : referenceValue.toFixed(2)), position: "insideTopRight", fontSize: 9, fill: "#0A0A0B", fontWeight: 600 }
+        y: referenceValue, stroke: "#0A0A0B", strokeWidth: 1.3, strokeDasharray: "5 3",
+        label: { value: (referenceLabel || "Média") + " " + (referenceValue >= 100 ? referenceValue.toFixed(0) : referenceValue.toFixed(2)), position: "insideTopRight", fontSize: 9.5, fill: "#0A0A0B", fontWeight: 700 }
       }),
-      // Faixas de zona (só se recebeu thresholds)
-      zoneThresholds && el(RC.ReferenceLine, { y: zoneThresholds[0], stroke: "#F59E0B", strokeWidth: 0.6, strokeDasharray: "1 3", opacity: 0.4 }),
-      zoneThresholds && el(RC.ReferenceLine, { y: zoneThresholds[1], stroke: "#3B82F6", strokeWidth: 0.6, strokeDasharray: "1 3", opacity: 0.4 }),
-      zoneThresholds && el(RC.ReferenceLine, { y: zoneThresholds[2], stroke: "#10B981", strokeWidth: 0.6, strokeDasharray: "1 3", opacity: 0.4 }),
+      // Linhas de zona (thresholds da literatura) — mais visíveis
+      zoneThresholds && el(RC.ReferenceLine, {
+        y: zoneThresholds[0], stroke: "#F59E0B", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7,
+        label: { value: "Médio " + zoneThresholds[0], position: "left", fontSize: 8, fill: "#B45309", fontWeight: 600 }
+      }),
+      zoneThresholds && el(RC.ReferenceLine, {
+        y: zoneThresholds[1], stroke: "#3B82F6", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7,
+        label: { value: "Alto " + zoneThresholds[1], position: "left", fontSize: 8, fill: "#1E40AF", fontWeight: 600 }
+      }),
+      zoneThresholds && el(RC.ReferenceLine, {
+        y: zoneThresholds[2], stroke: "#10B981", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7,
+        label: { value: "Elite " + zoneThresholds[2], position: "left", fontSize: 8, fill: "#047857", fontWeight: 600 }
+      }),
       ...series.map((s, i) => {
         const color = s.isBenchmark ? "#737373" : REPORT_COLORS_PDF[i % REPORT_COLORS_PDF.length];
         return el(RC.Area, {
@@ -4790,10 +4799,18 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
                 (md.deltaPct > 0 ? "↑ +" : md.deltaPct < 0 ? "↓ " : "→ ") + Math.abs(md.deltaPct).toFixed(1) + "%"),
               // Zona de referência (literatura)
               zone && el("div", { style: { marginTop: 4, paddingTop: 5, borderTop: "1px solid #E5E5E5" } },
-                el("span", { style: {
-                  fontSize: 8, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase",
-                  padding: "2px 6px", background: zone.color + "20", color: zone.color, borderRadius: 3
-                }}, zone.label)
+                el("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 3 } },
+                  el("span", { style: {
+                    fontSize: 8, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase",
+                    padding: "2px 6px", background: zone.color + "20", color: zone.color, borderRadius: 3
+                  }}, zone.label)
+                ),
+                // Valores numéricos das faixas
+                el("div", { style: { fontSize: 7.5, color: "#737373", lineHeight: 1.35, fontVariantNumeric: "tabular-nums", fontWeight: 500 } },
+                  "<" + zone.thresholds[0] + " / " +
+                  zone.thresholds[0] + "-" + zone.thresholds[1] + " / " +
+                  zone.thresholds[1] + "-" + zone.thresholds[2] + " / " +
+                  ">" + zone.thresholds[2])
               )
             );
           })
@@ -5491,17 +5508,36 @@ function ReportsView({ athletes, snapshots }) {
       const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx, kpisPerExercise, comparisonPerExercise };
 
       // Cria container oculto e renderiza PdfLayout
+      // NOTA: usa opacity:0 em vez de left:-99999px pra Recharts poder medir dimensões
       const container = document.createElement("div");
-      container.style.cssText = "position:absolute;left:-99999px;top:0;background:#fff;z-index:-1;";
+      container.style.cssText = "position:fixed;left:0;top:0;background:#fff;z-index:-999;opacity:0;pointer-events:none;width:794px;";
       document.body.appendChild(container);
       const root = ReactDOM.createRoot(container);
       await new Promise(resolve => {
         root.render(React.createElement(PdfLayout, {
           meta, executiveSummary, metricsData, comparisonRows, chartsPerMetric, groupedFindings
         }));
-        // Aguarda 2 frames + 800ms pra Recharts renderizar dentro do container
-        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 800)));
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
       });
+
+      // Aguarda TODOS os Recharts renderizarem (crítico pra multi-exercício com 15+ gráficos)
+      const waitForCharts = async () => {
+        const expectedCharts = container.querySelectorAll(".pdf-page .recharts-responsive-container");
+        const maxWait = 5000;
+        const start = Date.now();
+        while (Date.now() - start < maxWait) {
+          const rendered = container.querySelectorAll(".pdf-page .recharts-wrapper");
+          // Considera pronto quando todos containers têm wrapper interno
+          if (rendered.length >= expectedCharts.length && rendered.length > 0) {
+            // Extra 300ms pra animações e labels terminarem
+            await new Promise(r => setTimeout(r, 300));
+            return;
+          }
+          await new Promise(r => setTimeout(r, 100));
+        }
+        console.warn("Timeout aguardando Recharts renderizar");
+      };
+      await waitForCharts();
 
       const pages = container.querySelectorAll(".pdf-page");
       const { jsPDF } = window.jspdf;
@@ -5509,11 +5545,17 @@ function ReportsView({ athletes, snapshots }) {
 
       for (let i = 0; i < pages.length; i++) {
         if (i > 0) pdf.addPage();
+        // Pequena pausa entre capturas pra não travar
+        if (i > 0) await new Promise(r => setTimeout(r, 100));
         const pageCanvas = await window.html2canvas(pages[i], {
           scale: 1.5, backgroundColor: "#ffffff", useCORS: true, logging: false,
-          windowWidth: 794, windowHeight: 1123
+          windowWidth: 794, windowHeight: 1123,
+          onclone: (clonedDoc) => {
+            // Garante que a página clonada mantém a visibilidade
+            const clonedPage = clonedDoc.querySelectorAll(".pdf-page")[i];
+            if (clonedPage) clonedPage.style.opacity = "1";
+          }
         });
-        // JPEG com qualidade 0.85 reduz drasticamente o tamanho do PDF
         const imgData = pageCanvas.toDataURL("image/jpeg", 0.85);
         pdf.addImage(imgData, "JPEG", 0, 0, 210, 297);
       }
