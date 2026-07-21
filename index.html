@@ -4380,12 +4380,41 @@ function segmentFromRegression(reg, xMin, xMax) {
   ];
 }
 
+// Error boundary — isola falhas de renderização de um filho pra não derrubar a árvore React inteira.
+// Usado no LoadVelocityScatter (e outros componentes de gráfico) pra que um crash mostre mensagem
+// em vez de deixar a página branca.
+class ChartErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { console.error("[ChartErrorBoundary]", err, info); }
+  render() {
+    if (this.state.err) {
+      return React.createElement("div", { style: {
+        height: 300, display: "flex", alignItems: "center", justifyContent: "center",
+        background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8,
+        color: "#991B1B", fontSize: 12, padding: "0 24px", textAlign: "center", lineHeight: 1.5
+      }},
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontWeight: 600, marginBottom: 4 } }, "Erro ao renderizar gráfico"),
+          React.createElement("div", null, String(this.state.err && this.state.err.message || this.state.err))
+        )
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // LoadVelocityScatter — scatter %1RM × MPV com duas regressões (primeiras vs últimas)
 // + curva teórica de referência quando disponível (Back Squat, Bench Press)
 function LoadVelocityScatter({ snaps, exercise, height }) {
   const el = React.createElement;
+  const RC = window.Recharts;
   const pts = extractLoadVelocityPoints(snaps || []);
   const H = height || 380;
+
+  if (!RC) {
+    return el("div", { style: { height: H, display: "flex", alignItems: "center", justifyContent: "center", background: "#FAFAFA", color: "#A3A3A3", fontSize: 12 } }, "Recharts não carregado");
+  }
 
   if (pts.length < 4) {
     return el("div", { style: {
@@ -5119,7 +5148,9 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
                 (meta.mode === "posicao" ? "média posição: " : meta.mode === "grupo" ? "média categoria: " : "média time: ") + (c.referenceValue >= 100 ? c.referenceValue.toFixed(0) : c.referenceValue.toFixed(2)) + " " + mp.unit)
             ),
             (mp.chart_type === "load_velocity")
-              ? el(PdfLoadVelocityScatter, { snaps: c.scatterSnaps, exercise: c.exercise })
+              ? el(ChartErrorBoundary, null,
+                  el(PdfLoadVelocityScatter, { snaps: c.scatterSnaps, exercise: c.exercise })
+                )
               : el(PdfChartMini, {
                   series: c.series, unit: mp.unit,
                   referenceValue: c.referenceValue,
@@ -6215,7 +6246,9 @@ function ReportsView({ athletes, snapshots }) {
                       const scatterSnaps = snapshots.filter(sn =>
                         sn.exercise === ex && sn.session_date >= dMin && sn.session_date <= dMax && idSet.has(sn.athlete_id)
                       );
-                      return el(LoadVelocityScatter, { snaps: scatterSnaps, exercise: ex, height: isMulti ? 300 : 400 });
+                      return el(ChartErrorBoundary, null,
+                        el(LoadVelocityScatter, { snaps: scatterSnaps, exercise: ex, height: isMulti ? 300 : 400 })
+                      );
                     }
                     const bench = buildBenchmark(primEx.metric, ex);
                     const seriesWithBench = bench ? [...primEx.series, bench] : primEx.series;
