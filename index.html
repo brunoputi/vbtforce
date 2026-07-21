@@ -3533,6 +3533,72 @@ function BarsModal({bars,setBars,onClose}) {
 }
 
 
+// LogoModal — upload/edição do logo do clube (usado no PDF e no header do app)
+// Salvo em localStorage como base64. Sem migração de banco: cada navegador tem sua config.
+function LogoModal({ currentUrl, onSave, onClose }) {
+  const el = React.createElement;
+  const [previewUrl, setPreviewUrl] = useState(currentUrl || "");
+  const [error, setError] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleFile = (file) => {
+    setError(null);
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { setError("Arquivo precisa ser uma imagem (PNG, JPG, SVG, WebP)."); return; }
+    if (file.size > 2 * 1024 * 1024) { setError("Imagem muito grande (máx 2 MB). Comprima antes de subir."); return; }
+    const reader = new FileReader();
+    reader.onload = (e) => setPreviewUrl(e.target.result);
+    reader.onerror = () => setError("Erro lendo o arquivo. Tenta outro.");
+    reader.readAsDataURL(file);
+  };
+
+  return el("div", { style: { position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:400, display:"flex", alignItems:"center", justifyContent:"center", padding:16 } },
+    el("div", { style: { background:"#fff", border:"1px solid "+T.border, borderRadius:14, padding:22, width:"100%", maxWidth:420, boxShadow:"0 20px 60px rgba(0,0,0,0.2)" } },
+      el("div", { style: { display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 } },
+        el("div", null,
+          el("h2", { style: { fontSize:15, fontWeight:900, color:T.text, margin:0 } }, "Logo do clube"),
+          el("div", { style: { fontSize:11, color:T.muted, marginTop:2 } }, "Aparece no header do app e nos relatórios PDF")
+        ),
+        el("button", { onClick:onClose, style: { background:"none", border:"none", fontSize:22, cursor:"pointer", color:T.muted } }, "×")
+      ),
+      // Preview
+      el("div", { style: { background:"#F7FAFF", border:"1px solid "+T.border, borderRadius:9, padding:20, marginBottom:14, display:"flex", alignItems:"center", justifyContent:"center", minHeight:120 } },
+        previewUrl
+          ? el("img", { src: previewUrl, alt:"Preview", style: { maxWidth:"100%", maxHeight:100, objectFit:"contain" } })
+          : el("div", { style: { color:T.muted, fontSize:12, textAlign:"center" } },
+              el("div", { style: { fontSize:32, marginBottom:6 } }, "🖼️"),
+              el("div", null, "Nenhum logo carregado ainda")
+            )
+      ),
+      // Botões de ação
+      el("div", { style: { display:"flex", gap:8, marginBottom:12 } },
+        el("input", { ref: fileInputRef, type:"file", accept:"image/*", style:{ display:"none" },
+          onChange: (e) => handleFile(e.target.files && e.target.files[0]) }),
+        el("button", { onClick: () => fileInputRef.current && fileInputRef.current.click(),
+          style: { flex:1, padding:"10px 14px", borderRadius:8, border:"1.5px solid "+T.accent,
+            background:T.accent+"12", color:T.accent, fontSize:13, fontWeight:700, cursor:"pointer" } },
+          previewUrl ? "Trocar imagem" : "Escolher arquivo"),
+        previewUrl && el("button", { onClick: () => setPreviewUrl(""),
+          style: { padding:"10px 14px", borderRadius:8, border:"1.5px solid "+T.border,
+            background:"#fff", color:T.sub, fontSize:13, fontWeight:600, cursor:"pointer" } },
+          "Remover")
+      ),
+      // Dicas
+      el("div", { style: { fontSize:10.5, color:T.muted, lineHeight:1.5, marginBottom:14, padding:"8px 10px", background:"#FAFAFA", borderRadius:6 } },
+        "PNG ou SVG com fundo transparente funcionam melhor. Formato quadrado é ideal. Máx 2 MB."
+      ),
+      error && el("div", { style: { fontSize:11, color:"#C53030", background:"#FFF5F5", padding:"8px 10px", borderRadius:6, marginBottom:14 } }, error),
+      // Save / Cancel
+      el("div", { style: { display:"flex", gap:8 } },
+        el("button", { onClick:onClose, style: { flex:1, padding:"10px 14px", borderRadius:8, border:"1.5px solid "+T.border, background:"#fff", color:T.sub, fontSize:13, fontWeight:600, cursor:"pointer" } }, "Cancelar"),
+        el(Btn, { primary:true, onClick: () => { onSave(previewUrl); onClose(); }, style:{ flex:2, textAlign:"center" } }, "Salvar")
+      )
+    )
+  );
+}
+
+
+
 // ═══════════════════════════════════════════════════════════════════════════
 // DASHBOARD — visão consolidada com filtros de categoria e período
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5033,11 +5099,12 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
   const pageContent = { padding: "56px 64px 72px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" };
 
   // Helper: bloco de identidade visual (logo + wordmark) — usado no header e na capa
+  const logoSrc = meta.clubLogoUrl || CLUB_LOGO_URL;
   const brandBlock = (size) => {
     const sz = size === "big" ? { logo: 40, txt1: 14, txt2: 10 } : { logo: 22, txt1: 11, txt2: 9 };
     return el("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
-      CLUB_LOGO_URL
-        ? el("img", { src: CLUB_LOGO_URL, alt: "Athletico", style: { width: sz.logo, height: sz.logo, objectFit: "contain" } })
+      logoSrc
+        ? el("img", { src: logoSrc, alt: "Athletico", style: { width: sz.logo, height: sz.logo, objectFit: "contain" } })
         : el("div", { style: {
             width: sz.logo, height: sz.logo, background: "#0A0A0B",
             borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center",
@@ -5151,26 +5218,26 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
                 (md.deltaPct > 0 ? "↑ +" : md.deltaPct < 0 ? "↓ " : "→ ") + Math.abs(md.deltaPct).toFixed(1) + "%"),
               // Zona de referência (literatura)
               zone && el("div", { style: { marginTop: 4, paddingTop: 5, borderTop: "1px solid #E5E5E5" } },
-                el("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 4 } },
+                el("div", { style: { display: "flex", alignItems: "center", gap: 4, marginBottom: 5 } },
                   el("span", { style: {
                     fontSize: 8, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase",
                     padding: "2px 6px", background: zone.color + "20", color: zone.color, borderRadius: 3
                   }}, zone.label)
                 ),
-                // Legenda de zonas com bolinhas coloridas (mesma dos gráficos)
-                el("div", { style: { display: "flex", flexDirection: "column", gap: 2, fontSize: 7.5, color: "#525252", fontVariantNumeric: "tabular-nums", fontWeight: 500 } },
-                  el("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
-                    el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#EF4444", display: "inline-block", flexShrink: 0 } }),
-                    el("span", null, "Abaixo <" + zone.thresholds[0])),
-                  el("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
-                    el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#F59E0B", display: "inline-block", flexShrink: 0 } }),
-                    el("span", null, "Médio " + zone.thresholds[0] + "–" + zone.thresholds[1])),
-                  el("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
-                    el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#3B82F6", display: "inline-block", flexShrink: 0 } }),
-                    el("span", null, "Alto " + zone.thresholds[1] + "–" + zone.thresholds[2])),
-                  el("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
-                    el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#10B981", display: "inline-block", flexShrink: 0 } }),
-                    el("span", null, "Elite ≥" + zone.thresholds[2]))
+                // Legenda em LINHA — só bolinhas + valores (label da zona atual já mostrado no badge acima)
+                el("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, fontSize: 7.5, color: "#525252", fontVariantNumeric: "tabular-nums", fontWeight: 500 } },
+                  el("span", { style: { display: "inline-flex", alignItems: "center", gap: 3 } },
+                    el("span", { style: { width: 5, height: 5, borderRadius: "50%", background: "#EF4444", display: "inline-block", flexShrink: 0 } }),
+                    el("span", null, "<" + zone.thresholds[0])),
+                  el("span", { style: { display: "inline-flex", alignItems: "center", gap: 3 } },
+                    el("span", { style: { width: 5, height: 5, borderRadius: "50%", background: "#F59E0B", display: "inline-block", flexShrink: 0 } }),
+                    el("span", null, zone.thresholds[0] + "–" + zone.thresholds[1])),
+                  el("span", { style: { display: "inline-flex", alignItems: "center", gap: 3 } },
+                    el("span", { style: { width: 5, height: 5, borderRadius: "50%", background: "#3B82F6", display: "inline-block", flexShrink: 0 } }),
+                    el("span", null, zone.thresholds[1] + "–" + zone.thresholds[2])),
+                  el("span", { style: { display: "inline-flex", alignItems: "center", gap: 3 } },
+                    el("span", { style: { width: 5, height: 5, borderRadius: "50%", background: "#10B981", display: "inline-block", flexShrink: 0 } }),
+                    el("span", null, "≥" + zone.thresholds[2]))
                 )
               )
             );
@@ -5232,23 +5299,7 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
                 referenceLabel: c.referenceLabel,
                 zoneThresholds: c.zoneThresholds
               }),
-          // Legenda de zonas — mais compacta em modo compact
-          (mp.chart_type !== "load_velocity") && c.zoneThresholds && el("div", { style: { marginTop: 5, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, fontSize: isCompact ? 8.5 : 9, color: "#525252" } },
-            el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
-              el("span", { style: { width: 8, height: 2, background: "#EF4444", display: "inline-block", borderRadius: 1 } }),
-              el("span", null, "Abaixo <" + c.zoneThresholds[0])),
-            el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
-              el("span", { style: { width: 8, height: 2, background: "#F59E0B", display: "inline-block", borderRadius: 1 } }),
-              el("span", null, "Médio " + c.zoneThresholds[0] + "–" + c.zoneThresholds[1])),
-            el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
-              el("span", { style: { width: 8, height: 2, background: "#3B82F6", display: "inline-block", borderRadius: 1 } }),
-              el("span", null, "Alto " + c.zoneThresholds[1] + "–" + c.zoneThresholds[2])),
-            el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
-              el("span", { style: { width: 8, height: 2, background: "#10B981", display: "inline-block", borderRadius: 1 } }),
-              el("span", null, "Elite ≥" + c.zoneThresholds[2])),
-            el("span", { style: { color: "#A3A3A3", fontSize: 8.5 } }, mp.unit)
-          ),
-          // Legenda específica do scatter Load-Velocity
+          // Legenda específica do scatter Load-Velocity (mantida — traz info não repetida)
           (mp.chart_type === "load_velocity") && c.scatterSnaps && c.scatterSnaps.some(s => s.sets_data) && el("div", { style: { marginTop: 6, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, fontSize: 9, color: "#525252" } },
             el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
               el("span", { style: { width: 7, height: 7, borderRadius: "50%", background: "#CBD5E1", display: "inline-block" } }),
@@ -5296,8 +5347,10 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
     ));
   });
 
-  // 2) Páginas do scatter (1 por página, tamanho normal)
+  // 2) Páginas do scatter (1 por página, tamanho normal) — SÓ em modo atleta
+  // Em modo Categoria/Posição o scatter mostra só o aviso "selecione um atleta" — página desperdiçada.
   scatterMetrics.forEach(mp => {
+    if (meta.mode !== "atleta") return; // skipa, não gera página vazia
     pages.push(el("div", { className: "pdf-page", style: pageStyle },
       el("div", { style: pageContent },
         pageHeader("Evolução — " + mp.label),
@@ -5359,56 +5412,51 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
     ));
   });
 
-  // PÁGINA — ANÁLISE AGRUPADA
+  // PÁGINA FINAL — ANÁLISE AGRUPADA + METODOLOGIA (juntas numa só)
   pages.push(el("div", { className: "pdf-page", style: pageStyle },
     el("div", { style: pageContent },
-      pageHeader("Análise automática"),
-      el("h2", { style: { fontSize: 22, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 6, color: "#0A0A0B" } }, "Análise automática"),
-      el("div", { style: { fontSize: 11, color: "#737373", marginBottom: 24, fontWeight: 500 } }, "Achados agrupados por padrão · baseados em cruzamento de métricas + literatura VBT"),
-      el("div", { style: { display: "flex", flexDirection: "column", gap: 16 } },
+      pageHeader("Análise automática & Metodologia"),
+      // ─── Bloco 1: Análise automática ───
+      el("h2", { style: { fontSize: 20, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 5, color: "#0A0A0B" } }, "Análise automática"),
+      el("div", { style: { fontSize: 10.5, color: "#737373", marginBottom: 16, fontWeight: 500 } }, "Achados agrupados por padrão · baseados em cruzamento de métricas + literatura VBT"),
+      el("div", { style: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 } },
         ...groupedFindings.map((g, i) => {
           const sevColor = g.severity === 2 ? "#EF4444" : g.severity === 1 ? "#F59E0B" : "#10B981";
           const sevLabel = g.severity === 2 ? "Atenção" : g.severity === 1 ? "Ajuste" : "Positivo";
-          return el("div", { key: i, style: { display: "flex", gap: 14, padding: "12px 0" } },
+          return el("div", { key: i, style: { display: "flex", gap: 12, padding: "8px 0" } },
             el("div", { style: { flex: "0 0 3px", background: sevColor, borderRadius: 2 } }),
             el("div", { style: { flex: 1 } },
-              el("div", { style: { fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: sevColor, fontWeight: 700, marginBottom: 5 } }, sevLabel),
-              el("div", { style: { fontSize: 13, fontWeight: 600, color: "#0A0A0B", marginBottom: 5, lineHeight: 1.4 } }, g.title),
-              el("div", { style: { fontSize: 11, color: "#525252", lineHeight: 1.55, marginBottom: 5 } }, g.athletes),
-              el("div", { style: { fontSize: 11, color: "#737373", lineHeight: 1.55 } }, "→ " + g.recommendation)
+              el("div", { style: { fontSize: 8.5, letterSpacing: ".08em", textTransform: "uppercase", color: sevColor, fontWeight: 700, marginBottom: 3 } }, sevLabel),
+              el("div", { style: { fontSize: 12, fontWeight: 600, color: "#0A0A0B", marginBottom: 4, lineHeight: 1.35 } }, g.title),
+              el("div", { style: { fontSize: 10, color: "#525252", lineHeight: 1.5, marginBottom: 4 } }, g.athletes),
+              el("div", { style: { fontSize: 10, color: "#737373", lineHeight: 1.5 } }, "→ " + g.recommendation)
             )
           );
         })
-      )
-    )
-  ));
-
-  // PÁGINA FINAL — REFERÊNCIAS E METODOLOGIA
-  pages.push(el("div", { className: "pdf-page", style: pageStyle },
-    el("div", { style: pageContent },
-      pageHeader("Metodologia & Referências"),
-      el("h2", { style: { fontSize: 22, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 20, color: "#0A0A0B" } }, "Metodologia & Referências"),
-      // Metodologia
-      el("h3", { style: { fontSize: 12, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#525252", margin: 0, marginBottom: 10 } }, "Metodologia"),
-      el("div", { style: { fontSize: 11, color: "#525252", lineHeight: 1.6, marginBottom: 24 } },
-        el("p", { style: { margin: "0 0 8px 0" } },
-          el("strong", null, "e1RM (estimated 1RM): "), "carga máxima estimada via perfil velocidade-carga. Usa regressão linear quando há 3+ cargas distintas; senão, aplica equação generalizada (%1RM em função da MPV) sobre a carga mais pesada da sessão."),
-        el("p", { style: { margin: "0 0 8px 0" } },
-          el("strong", null, "Força relativa: "), "e1RM dividido pelo peso corporal do dia (ou peso registrado no perfil quando ausente). Elimina o efeito de ganho/perda de massa."),
-        el("p", { style: { margin: "0 0 8px 0" } },
-          el("strong", null, "Potência pico relativa: "), "pico de potência (W) dividido pelo peso corporal. Métrica mais correlacionada com sprint e salto em jogadores de futebol."),
-        el("p", { style: { margin: "0 0 8px 0" } },
-          el("strong", null, "Velocidade pico: "), "maior velocidade concêntrica registrada na sessão."),
+      ),
+      // Separador visual entre as duas seções
+      el("div", { style: { height: 1, background: "#E5E5E5", margin: "8px 0 18px" } }),
+      // ─── Bloco 2: Metodologia + Referências ───
+      el("h2", { style: { fontSize: 20, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 12, color: "#0A0A0B" } }, "Metodologia & Referências"),
+      el("h3", { style: { fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#525252", margin: 0, marginBottom: 8 } }, "Metodologia"),
+      el("div", { style: { fontSize: 10, color: "#525252", lineHeight: 1.5, marginBottom: 14 } },
+        el("p", { style: { margin: "0 0 5px 0" } },
+          el("strong", null, "e1RM (estimated 1RM): "), "carga máxima estimada via perfil velocidade-carga. Regressão linear quando há 3+ cargas distintas; senão, equação generalizada (%1RM em função da MPV) sobre a carga mais pesada."),
+        el("p", { style: { margin: "0 0 5px 0" } },
+          el("strong", null, "Força relativa: "), "e1RM ÷ peso corporal do dia. Elimina efeito de ganho/perda de massa."),
+        el("p", { style: { margin: "0 0 5px 0" } },
+          el("strong", null, "Potência pico relativa: "), "pico de potência (W) ÷ peso corporal. Métrica mais correlacionada com sprint e salto em futebol."),
+        el("p", { style: { margin: "0 0 5px 0" } },
+          el("strong", null, "Perfil Load-Velocity: "), "scatter %1RM × MPV. Cada ponto = uma repetição. Comparativo entre primeiras e últimas sessões via regressão linear."),
         el("p", { style: { margin: 0 } },
-          el("strong", null, "Comparativo de tendência: "), "média dos últimos ~3 pontos vs. média dos ~3 primeiros do período. Reduz ruído de sessão isolada.")
+          el("strong", null, "Comparativo de tendência: "), "média dos últimos ~3 pontos vs. média dos ~3 primeiros do período.")
       ),
-      // Referências
-      el("h3", { style: { fontSize: 12, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#525252", margin: 0, marginBottom: 10 } }, "Referências científicas"),
-      el("div", { style: { fontSize: 10, color: "#525252", lineHeight: 1.7 } },
-        ...REFERENCE_SOURCES.map((s, i) => el("div", { key: i, style: { marginBottom: 3 } }, s))
+      el("h3", { style: { fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#525252", margin: 0, marginBottom: 8 } }, "Referências científicas"),
+      el("div", { style: { fontSize: 9.5, color: "#525252", lineHeight: 1.55 } },
+        ...REFERENCE_SOURCES.map((s, i) => el("div", { key: i, style: { marginBottom: 2 } }, s))
       ),
-      el("div", { style: { marginTop: "auto", paddingTop: 20, fontSize: 9.5, color: "#A3A3A3", lineHeight: 1.5, fontStyle: "italic" } },
-        "Faixas de referência (Abaixo / Médio / Alto / Elite) são valores orientativos baseados em amostras de futebol profissional masculino. Podem variar por idade, posição de jogo e fase do treinamento.")
+      el("div", { style: { marginTop: "auto", paddingTop: 14, fontSize: 9, color: "#A3A3A3", lineHeight: 1.5, fontStyle: "italic" } },
+        "Faixas de referência (Abaixo / Médio / Alto / Elite) são valores orientativos baseados em amostras de futebol profissional masculino. Podem variar por idade, posição e fase do treinamento.")
     )
   ));
 
@@ -5429,7 +5477,7 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
   )));
 }
 
-function ReportsView({ athletes, snapshots }) {
+function ReportsView({ athletes, snapshots, clubLogoUrl }) {
   const el = React.createElement;
 
   // ── Filtros ──
@@ -5930,43 +5978,39 @@ function ReportsView({ athletes, snapshots }) {
           if (rel && rel.delta > 5 && ppr && ppr.delta > 3 && e1 && e1.delta > 3) productive.push({ name, delta: rel.delta });
           if (e1 && e1.spark && e1.spark.length >= 6 && Math.abs(e1.delta || 0) < 2 && load && Math.abs(load.delta || 0) < 2) plateau.push({ name });
         });
+        // Lista TODOS os nomes — CT precisa saber quem está em cada padrão, não só os "piores 5"
         if (powerDrop.length > 0) {
           const sorted = powerDrop.sort((a,b) => a.delta - b.delta);
-          const names = sorted.slice(0, 5).map(x => x.name + " (" + x.delta.toFixed(0) + "%)").join(", ");
-          const more = sorted.length > 5 ? " e mais " + (sorted.length - 5) + " atleta(s)" : "";
-          grouped.push({ severity: 2, title: "Queda de potência relativa em " + sorted.length + " atleta" + (sorted.length === 1 ? "" : "s"), athletes: names + more,
+          const names = sorted.map(x => x.name + " (" + x.delta.toFixed(0) + "%)").join(", ");
+          grouped.push({ severity: 2, title: "Queda de potência relativa em " + sorted.length + " atleta" + (sorted.length === 1 ? "" : "s"), athletes: names,
             recommendation: "Potência é a métrica mais correlacionada com sprint/salto em futebol. Priorizar cargas ótimas de potência (30-60% e1RM) + saltos e arremessos." });
         }
         if (strengthDrop.length > 0) {
           const sorted = strengthDrop.sort((a,b) => a.delta - b.delta);
-          const names = sorted.slice(0, 5).map(x => x.name + " (" + x.delta.toFixed(0) + "%)").join(", ");
-          const more = sorted.length > 5 ? " e mais " + (sorted.length - 5) + " atleta(s)" : "";
-          grouped.push({ severity: 2, title: "Perda de força relativa com e1RM estável em " + sorted.length + " atleta" + (sorted.length === 1 ? "" : "s"), athletes: names + more,
+          const names = sorted.map(x => x.name + " (" + x.delta.toFixed(0) + "%)").join(", ");
+          grouped.push({ severity: 2, title: "Perda de força relativa com e1RM estável em " + sorted.length + " atleta" + (sorted.length === 1 ? "" : "s"), athletes: names,
             recommendation: "Provável ganho de massa sem transferência neural. Bloco de 3 semanas com cargas 85-95% + VLoss 10-15%." });
         }
         if (velocityDrop.length > 0) {
-          const names = velocityDrop.slice(0, 5).map(x => x.name).join(", ");
-          const more = velocityDrop.length > 5 ? " e mais " + (velocityDrop.length - 5) : "";
-          grouped.push({ severity: 1, title: "Hipertrofia sem manutenção de velocidade em " + velocityDrop.length + " atleta" + (velocityDrop.length === 1 ? "" : "s"), athletes: names + more,
+          const names = velocityDrop.map(x => x.name).join(", ");
+          grouped.push({ severity: 1, title: "Hipertrofia sem manutenção de velocidade em " + velocityDrop.length + " atleta" + (velocityDrop.length === 1 ? "" : "s"), athletes: names,
             recommendation: "Adicionar dia de força-velocidade com cargas 40-60% × 3-5 séries × 4-6 reps." });
         }
         if (plateau.length > 0) {
-          const names = plateau.slice(0, 5).map(x => x.name).join(", ");
-          const more = plateau.length > 5 ? " e mais " + (plateau.length - 5) : "";
-          grouped.push({ severity: 1, title: "Plateau em força/carga em " + plateau.length + " atleta" + (plateau.length === 1 ? "" : "s"), athletes: names + more,
+          const names = plateau.map(x => x.name).join(", ");
+          grouped.push({ severity: 1, title: "Plateau em força/carga em " + plateau.length + " atleta" + (plateau.length === 1 ? "" : "s"), athletes: names,
             recommendation: "Bloco de acumulação (volume +20-30% × carga 70-80%) ou deload de 1 semana." });
         }
         if (productive.length > 0) {
-          const names = productive.slice(0, 5).map(x => x.name + " (+" + x.delta.toFixed(0) + "%)").join(", ");
-          const more = productive.length > 5 ? " e mais " + (productive.length - 5) : "";
-          grouped.push({ severity: 0, title: "Evolução consistente em " + productive.length + " atleta" + (productive.length === 1 ? "" : "s"), athletes: names + more,
+          const names = productive.map(x => x.name + " (+" + x.delta.toFixed(0) + "%)").join(", ");
+          grouped.push({ severity: 0, title: "Evolução consistente em " + productive.length + " atleta" + (productive.length === 1 ? "" : "s"), athletes: names,
             recommendation: "Fase produtiva. Manter estímulo atual e monitorar sinais de fadiga." });
         }
         if (grouped.length === 0) grouped.push({ severity: 0, title: "Sem achados relevantes no período", athletes: "Dados dentro da variabilidade normal.", recommendation: "Continuar monitoramento." });
         return grouped;
       })();
 
-      const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx, kpisPerExercise, comparisonPerExercise, mode };
+      const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx, kpisPerExercise, comparisonPerExercise, mode, clubLogoUrl };
 
       // Cria container oculto e renderiza PdfLayout
       // NOTA: usa left:0 + z-index:-999 (sem opacity:0!) pra Recharts poder medir dimensões.
@@ -6280,7 +6324,7 @@ function ReportsView({ athletes, snapshots }) {
                       sparklineData.length >= 2 && el("div", { style: { marginTop: 6, marginLeft: -4, marginRight: -4 } },
                         el(Sparkline, { points: sparklineData, height: isMulti ? 26 : 34, positive: !isDown, color: isDown ? R.negative : R.positive })
                       ),
-                      // Zona de referência + legenda com bolinhas coloridas (só se métrica tem faixa cadastrada)
+                      // Zona de referência + legenda inline (só se métrica tem faixa cadastrada)
                       zone && el("div", { style: { marginTop: 10, paddingTop: 8, borderTop: "1px solid " + R.border } },
                         el("div", { style: { marginBottom: 6 } },
                           el("span", { style: {
@@ -6288,19 +6332,19 @@ function ReportsView({ athletes, snapshots }) {
                             padding: "3px 8px", background: zone.color + "20", color: zone.color, borderRadius: 3
                           }}, zone.label)
                         ),
-                        el("div", { style: { display: "flex", flexDirection: "column", gap: 3, fontSize: 9.5, color: R.textSub, fontVariantNumeric: "tabular-nums", fontWeight: 500 } },
-                          el("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
-                            el("span", { style: { width: 7, height: 7, borderRadius: "50%", background: "#EF4444", display: "inline-block", flexShrink: 0 } }),
-                            el("span", null, "Abaixo <" + zone.thresholds[0])),
-                          el("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
-                            el("span", { style: { width: 7, height: 7, borderRadius: "50%", background: "#F59E0B", display: "inline-block", flexShrink: 0 } }),
-                            el("span", null, "Médio " + zone.thresholds[0] + "–" + zone.thresholds[1])),
-                          el("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
-                            el("span", { style: { width: 7, height: 7, borderRadius: "50%", background: "#3B82F6", display: "inline-block", flexShrink: 0 } }),
-                            el("span", null, "Alto " + zone.thresholds[1] + "–" + zone.thresholds[2])),
-                          el("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
-                            el("span", { style: { width: 7, height: 7, borderRadius: "50%", background: "#10B981", display: "inline-block", flexShrink: 0 } }),
-                            el("span", null, "Elite ≥" + zone.thresholds[2]))
+                        el("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, fontSize: 9.5, color: R.textSub, fontVariantNumeric: "tabular-nums", fontWeight: 500 } },
+                          el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                            el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#EF4444", display: "inline-block", flexShrink: 0 } }),
+                            el("span", null, "<" + zone.thresholds[0])),
+                          el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                            el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#F59E0B", display: "inline-block", flexShrink: 0 } }),
+                            el("span", null, zone.thresholds[0] + "–" + zone.thresholds[1])),
+                          el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                            el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#3B82F6", display: "inline-block", flexShrink: 0 } }),
+                            el("span", null, zone.thresholds[1] + "–" + zone.thresholds[2])),
+                          el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                            el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: "#10B981", display: "inline-block", flexShrink: 0 } }),
+                            el("span", null, "≥" + zone.thresholds[2]))
                         )
                       )
                     );
@@ -6557,6 +6601,18 @@ function App() {
   const [syncing, setSyncing] = useState(false);
   const [showBars, setShowBars] = useState(false);
   const [error, setError] = useState(null);
+  const [showLogoModal, setShowLogoModal] = useState(false);
+  const [clubLogoUrl, setClubLogoUrlState] = useState(() => {
+    try { return localStorage.getItem('vbtforce_club_logo') || CLUB_LOGO_URL || ''; }
+    catch { return CLUB_LOGO_URL || ''; }
+  });
+  const setClubLogoUrl = (url) => {
+    try {
+      if (url) localStorage.setItem('vbtforce_club_logo', url);
+      else localStorage.removeItem('vbtforce_club_logo');
+    } catch(e) { console.error("Erro salvando logo:", e); }
+    setClubLogoUrlState(url || '');
+  };
 
   // Load all data on mount
   useEffect(() => {
@@ -6883,6 +6939,20 @@ function App() {
         el("span", {className: "tab-label"}, t.label)
       )),
       el("div", {style: {marginLeft: "auto", display: "flex", alignItems: "center", gap: 8}},
+        el("button", {onClick: () => setShowLogoModal(true),
+          title: "Configurar logo do clube",
+          style: {
+            display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 6,
+            border: "1px solid " + T.border, background: "#fff", color: T.sub,
+            fontSize: 11, fontWeight: 700, cursor: "pointer"
+          }},
+          clubLogoUrl
+            ? el(React.Fragment, null,
+                el("img", { src: clubLogoUrl, alt:"", style:{ width:14, height:14, objectFit:"contain" } }),
+                el("span", null, "Logo")
+              )
+            : "🎨 Logo"
+        ),
         el("button", {onClick: () => setShowBars(true),
           style: {
             display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 6,
@@ -6912,7 +6982,7 @@ function App() {
       dataLoaded && view === "athletes" && el(AthletesView, {athletes, setAthletes, profiles, setProfiles, saveAthlete, deleteAthlete, saveProfiles}),
       dataLoaded && view === "presenca" && el(PresencaView, {athletes, importPresenca, loadPresencaDia, updatePresenca}),
       dataLoaded && view === "profiles" && el(ProfilesView, {athletes, profiles}),
-      dataLoaded && view === "reports"  && el(ReportsView,  {athletes, snapshots})
+      dataLoaded && view === "reports"  && el(ReportsView,  {athletes, snapshots, clubLogoUrl})
     ),
 
     // Mobile bottom nav
@@ -6928,7 +6998,8 @@ function App() {
       ))
     ),
 
-    showBars && el(BarsModal, {bars, setBars: saveBars, onClose: () => setShowBars(false)})
+    showBars && el(BarsModal, {bars, setBars: saveBars, onClose: () => setShowBars(false)}),
+    showLogoModal && el(LogoModal, { currentUrl: clubLogoUrl, onSave: setClubLogoUrl, onClose: () => setShowLogoModal(false) })
   );
 }
 
