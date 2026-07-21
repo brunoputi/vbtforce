@@ -4301,6 +4301,32 @@ const LOAD_VELOCITY_CURVES = {
   }
 };
 
+// Detecta se o e1RM da sessão é uma estimativa confiável.
+// Falha em três cenários (do mais comum ao menos):
+//   1. Extrapolação excessiva: e1RM > 2.5× a maior carga da sessão (regressão instável).
+//   2. Poucas cargas distintas: <3 cargas quando temos sets_data (regressão com 2 pontos é ruim).
+//   3. Snapshots antigos sem sets_data caem no critério 1 apenas, mas com threshold mais rígido (2.0×)
+//      já que não conseguimos verificar a qualidade da regressão.
+// Retorna true se confiável, false se suspeita.
+function hasReliableE1RM(snap) {
+  if (!snap || snap.e1rm == null || snap.max_load == null || snap.max_load <= 0) return false;
+  const ratio = snap.e1rm / snap.max_load;
+  if (snap.sets_data && Array.isArray(snap.sets_data) && snap.sets_data.length > 0) {
+    // Tem dados set-a-set — aplica as duas regras
+    if (ratio > 2.5) return false;
+    const uniqueLoads = new Set(
+      snap.sets_data.map(r => r.load).filter(l => l != null && l > 0)
+        .map(l => Math.round(l * 2) / 2) // arredonda pra 0.5 kg pra tolerar variação de placa
+    );
+    if (uniqueLoads.size < 3) return false;
+    return true;
+  }
+  // Sem sets_data — critério mais rígido (2.0×) já que não podemos avaliar a regressão
+  if (ratio > 2.0) return false;
+  return true;
+}
+
+
 // Extrai pontos (%1RM, MPV) de uma lista de snapshots com sets_data
 function extractLoadVelocityPoints(snaps) {
   const pts = [];
@@ -4452,6 +4478,26 @@ function segmentFromRegression(reg, xMin, xMax) {
     { pct: xMax, mpv: +(reg.intercept + reg.slope * xMax).toFixed(3) }
   ];
 }
+
+// Média móvel deslizante centrada (window=3 por padrão) sobre valores numéricos.
+// Retorna array do mesmo tamanho — o valor em i é a média dos vizinhos disponíveis.
+// Usado como linha de tendência nos gráficos temporais (LineChart, PdfChartMini).
+// Menos afetado por outliers que regressão linear em séries VBT ruidosas.
+function rollingMean(values, window) {
+  window = window || 3;
+  const half = Math.floor(window / 2);
+  const n = values.length;
+  const out = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    let sum = 0, count = 0;
+    for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) {
+      if (values[j] != null && !isNaN(values[j])) { sum += values[j]; count++; }
+    }
+    if (count >= 2) out[i] = +(sum / count).toFixed(2);
+  }
+  return out;
+}
+
 
 // Error boundary — isola falhas de renderização de um filho pra não derrubar a árvore React inteira.
 // Usado no LoadVelocityScatter (e outros componentes de gráfico) pra que um crash mostre mensagem
@@ -4638,6 +4684,16 @@ function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresh
     return row;
   });
 
+  // Linha de tendência (média móvel de 3 pontos) sobre a série principal (s0, não-benchmark)
+  // Só aparece se tem 5+ pontos, senão vira quase a própria série
+  const primaryIdx = series.findIndex(s => !s.isBenchmark);
+  const showTrend = primaryIdx >= 0 && dataset.length >= 5;
+  if (showTrend) {
+    const values = dataset.map(d => d["s" + primaryIdx]);
+    const trend = rollingMean(values, 3);
+    trend.forEach((v, i) => { if (v != null) dataset[i].__trend = v; });
+  }
+
   // Ticks estratégicos: primeiro dia de cada mês presente + primeiro e último ponto
   const dateStrs = dataset.map(d => d.date).sort();
   const strategicTicks = React.useMemo(() => {
@@ -4684,7 +4740,7 @@ function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresh
     }
   }
 
-  const chartType = showArea ? RC.AreaChart : RC.LineChart;
+  const chartType = RC.ComposedChart; // sempre ComposedChart pra suportar mix Area+Line (tendência)
   const seriesElement = showArea ? RC.Area : RC.Line;
 
   return el(RC.ResponsiveContainer, { width: "100%", height: H },
@@ -4752,6 +4808,13 @@ function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresh
           props.fillOpacity = 0.6;
         }
         return el(seriesElement, props);
+      }),
+      // Linha de tendência (média móvel 3 pontos) — sempre desenhada como Line, não Area
+      showTrend && el(RC.Line, {
+        key: "trend", type: "monotone", dataKey: "__trend", name: "Tendência (MM3)",
+        stroke: "#EF4444", strokeWidth: 1.8, strokeDasharray: "6 3",
+        dot: false, activeDot: false, connectNulls: true, isAnimationActive: false,
+        fill: "transparent"
       })
     )
   );
@@ -5026,6 +5089,16 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
     });
     return row;
   });
+
+  // Linha de tendência (média móvel de 3 pontos) sobre a série principal
+  const primaryIdxPdf = series.findIndex(s => !s.isBenchmark);
+  const showTrendPdf = primaryIdxPdf >= 0 && dataset.length >= 5;
+  if (showTrendPdf) {
+    const values = dataset.map(d => d["s" + primaryIdxPdf]);
+    const trend = rollingMean(values, 3);
+    trend.forEach((v, i) => { if (v != null) dataset[i].__trend = v; });
+  }
+
   const REPORT_COLORS_PDF = ["#0A0A0B","#EF4444","#3B82F6","#F59E0B","#8B5CF6","#14B8A6"];
   const xTickFormatter = (d) => {
     const dt = new Date(d);
@@ -5033,7 +5106,7 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
   };
 
   return el(RC.ResponsiveContainer, { width: "100%", height: 220 },
-    el(RC.AreaChart, { data: dataset, margin: { top: 10, right: 15, left: 5, bottom: 5 } },
+    el(RC.ComposedChart, { data: dataset, margin: { top: 10, right: 15, left: 5, bottom: 5 } },
       el("defs", null,
         ...series.map((s, i) => {
           const color = s.isBenchmark ? "#737373" : REPORT_COLORS_PDF[i % REPORT_COLORS_PDF.length];
@@ -5080,6 +5153,13 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
           dot: false,
           isAnimationActive: false, connectNulls: true
         });
+      }),
+      // Linha de tendência (média móvel 3 pontos) — vermelha tracejada sutil
+      showTrendPdf && el(RC.Line, {
+        key: "trend", type: "monotone", dataKey: "__trend", name: "Tendência (MM3)",
+        stroke: "#EF4444", strokeWidth: 1.5, strokeDasharray: "5 3",
+        dot: false, activeDot: false, isAnimationActive: false, connectNulls: true,
+        fill: "transparent"
       })
     )
   );
@@ -5317,6 +5397,11 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
               el("span", { style: { width: 14, height: 1.5, borderTop: "1.5px dashed #EF4444", display: "inline-block" } }),
               el("span", null, LOAD_VELOCITY_CURVES[c.exercise].source))
           ),
+          // Caption sutil pra trend line (só nos gráficos regulares)
+          (mp.chart_type !== "load_velocity") && el("div", { style: { fontSize: 8, color: "#A3A3A3", marginTop: 3, display: "flex", alignItems: "center", gap: 5 } },
+            el("span", { style: { width: 12, height: 1.5, borderTop: "1.5px dashed #EF4444", display: "inline-block" } }),
+            el("span", null, "Tendência (média móvel 3 pontos — aparece quando há 5+ sessões)")
+          ),
           c.referenceSource && (mp.chart_type !== "load_velocity") && el("div", { style: { fontSize: 8, color: "#A3A3A3", marginTop: 3, fontStyle: "italic" } }, "Referências: " + c.referenceSource)
         ))
       )
@@ -5449,7 +5534,9 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
         el("p", { style: { margin: "0 0 5px 0" } },
           el("strong", null, "Perfil Load-Velocity: "), "scatter %1RM × MPV. Cada ponto = uma repetição. Comparativo entre primeiras e últimas sessões via regressão linear."),
         el("p", { style: { margin: 0 } },
-          el("strong", null, "Comparativo de tendência: "), "média dos últimos ~3 pontos vs. média dos ~3 primeiros do período.")
+          el("strong", null, "Comparativo de tendência: "), "média dos últimos ~3 pontos vs. média dos ~3 primeiros do período."),
+        meta.hideUncertain && meta.uncertainCount > 0 && el("p", { style: { margin: "6px 0 0 0", color: "#78350F", fontSize: 9.5 } },
+          el("strong", null, "Filtro de qualidade aplicado: "), meta.uncertainCount + " sessão(ões) com estimativa incerta de e1RM foi(ram) ocultada(s) deste relatório. Critérios: <3 cargas distintas na sessão, ou e1RM extrapolado >2,5× a carga máxima (>2× se sem dados set-a-set).")
       ),
       el("h3", { style: { fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "#525252", margin: 0, marginBottom: 8 } }, "Referências científicas"),
       el("div", { style: { fontSize: 9.5, color: "#525252", lineHeight: 1.55 } },
@@ -5500,6 +5587,15 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
   const [showAlerts, setShowAlerts] = useState(false);
 
   const activeAthletes = useMemo(() => athletes.filter(a => a.status === "ativo"), [athletes]);
+
+  // Filtro de qualidade de e1RM — default: ocultar estimativas incertas
+  // Menos ruído nos gráficos e nas médias, mais fidelidade ao que o CT precisa ver.
+  const [hideUncertain, setHideUncertain] = useState(true);
+  const uncertainCount = useMemo(() => snapshots.filter(s => !hasReliableE1RM(s)).length, [snapshots]);
+  const filteredSnapshots = useMemo(
+    () => hideUncertain ? snapshots.filter(hasReliableE1RM) : snapshots,
+    [snapshots, hideUncertain]
+  );
 
   // Range de datas
   const dateRange = useMemo(() => {
@@ -5561,7 +5657,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
     const inRange = (d) => d >= dMin && d <= dMax;
 
     // Filtra snapshots do exercício + período
-    const relevantSnaps = snapshots.filter(s =>
+    const relevantSnaps = filteredSnapshots.filter(s =>
       s.exercise === ex &&
       s.session_date >= dMin && s.session_date <= dMax
     );
@@ -5618,14 +5714,14 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
       }));
       return { name: key + " (n=" + athIds.length + ")", points };
     });
-  }, [mode, selected, exercise, dateRange, snapshots, activeAthletes]);
+  }, [mode, selected, exercise, dateRange, filteredSnapshots, activeAthletes]);
 
   // ── Benchmark: constrói série de referência ──
   const buildBenchmark = React.useCallback((metric, exOverride) => {
     if (benchmarkType === "none") return null;
     const ex = exOverride || exercise;
     const [dMin, dMax] = dateRange;
-    const relevantSnaps = snapshots.filter(s =>
+    const relevantSnaps = filteredSnapshots.filter(s =>
       s.exercise === ex && s.session_date >= dMin && s.session_date <= dMax
     );
     let athIds = [];
@@ -5667,12 +5763,12 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
       date, value: +(agg === Math.max ? Math.max(...vals) : agg(vals)).toFixed(2)
     }));
     return { name: benchLabel, points, isBenchmark: true };
-  }, [benchmarkType, benchmarkAthlete, mode, selected, exercise, dateRange, snapshots, activeAthletes]);
+  }, [benchmarkType, benchmarkAthlete, mode, selected, exercise, dateRange, filteredSnapshots, activeAthletes]);
 
   // ── Contexto pro KPI card: média do time e delta vs última sessão ──
   const computeContext = React.useCallback((metric) => {
     const [dMin, dMax] = dateRange;
-    const relevantSnaps = snapshots.filter(s =>
+    const relevantSnaps = filteredSnapshots.filter(s =>
       s.exercise === exercise && s.session_date >= dMin && s.session_date <= dMax
     );
     // Média do time no período
@@ -5685,13 +5781,13 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
     });
     const teamAvg = teamVals.length > 0 ? teamVals.reduce((a,b)=>a+b,0) / teamVals.length : null;
     return { teamAvg, teamAvgStr: teamAvg != null ? (teamAvg >= 100 ? teamAvg.toFixed(0) : teamAvg.toFixed(2)) : null };
-  }, [exercise, dateRange, snapshots, activeAthletes]);
+  }, [exercise, dateRange, filteredSnapshots, activeAthletes]);
 
   // ── Tabela comparativa: uma linha por atleta com todas métricas + sparkline ──
   const buildComparisonForEx = React.useCallback((targetExArg) => {
     if (selected.length === 0) return [];
     const [dMin, dMax] = dateRange;
-    const relevantSnaps = snapshots.filter(s =>
+    const relevantSnaps = filteredSnapshots.filter(s =>
       s.session_date >= dMin && s.session_date <= dMax
     );
     let athletesToShow = [];
@@ -5733,7 +5829,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
       });
       return row;
     });
-  }, [selected, mode, dateRange, snapshots, activeAthletes]);
+  }, [selected, mode, dateRange, filteredSnapshots, activeAthletes]);
 
   // Mantém compat: usa primeiro exercício selecionado
   const comparisonTableData = React.useMemo(() => {
@@ -5800,7 +5896,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
   // ── Alertas: atletas em queda >5% no período ──
   const alerts = useMemo(() => {
     const [dMin, dMax] = dateRange;
-    const relevantSnaps = snapshots.filter(s => s.session_date >= dMin && s.session_date <= dMax);
+    const relevantSnaps = filteredSnapshots.filter(s => s.session_date >= dMin && s.session_date <= dMax);
     const list = [];
     activeAthletes.forEach(ath => {
       EXERCISES.forEach(exName => {
@@ -5831,7 +5927,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
       });
     });
     return list.sort((a,b) => a.deltaPct - b.deltaPct);
-  }, [activeAthletes, snapshots, dateRange]);
+  }, [activeAthletes, filteredSnapshots, dateRange]);
 
   // ── Resumo executivo automático ──
   const executiveSummary = useMemo(() => {
@@ -5900,7 +5996,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
       // Também calcula média do grupo (referência) e faixas de zona
       const computeGroupAvg = (metric, ex) => {
         const [dMin, dMax] = dateRange;
-        const relevant = snapshots.filter(s => s.exercise === ex && s.session_date >= dMin && s.session_date <= dMax);
+        const relevant = filteredSnapshots.filter(s => s.exercise === ex && s.session_date >= dMin && s.session_date <= dMax);
         // Escopo: modo determina quais atletas são o "grupo"
         let athIds = [];
         if (mode === "posicao") {
@@ -5954,7 +6050,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
               if (ath) athIds.push(ath.id);
             }
             const idSet = new Set(athIds);
-            base.scatterSnaps = snapshots.filter(sn =>
+            base.scatterSnaps = filteredSnapshots.filter(sn =>
               sn.exercise === ex && sn.session_date >= dMin && sn.session_date <= dMax && idSet.has(sn.athlete_id)
             );
           }
@@ -6010,7 +6106,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
         return grouped;
       })();
 
-      const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx, kpisPerExercise, comparisonPerExercise, mode, clubLogoUrl };
+      const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx, kpisPerExercise, comparisonPerExercise, mode, clubLogoUrl, hideUncertain, uncertainCount };
 
       // Cria container oculto e renderiza PdfLayout
       // NOTA: usa left:0 + z-index:-999 (sem opacity:0!) pra Recharts poder medir dimensões.
@@ -6194,6 +6290,27 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
 
         // Spacer
         el("div", { style: { flex: 1, minWidth: 20 } }),
+
+        // Toggle: ocultar/mostrar sessões com estimativa incerta de e1RM
+        uncertainCount > 0 && el("button", {
+          onClick: () => setHideUncertain(v => !v),
+          title: hideUncertain
+            ? uncertainCount + " sessão(ões) com estimativa incerta de e1RM ocultada(s). Clique pra mostrar."
+            : "Mostrando todas as " + uncertainCount + " sessão(ões) com estimativa incerta. Clique pra ocultar.",
+          style: {
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "6px 10px", background: hideUncertain ? "#fff" : "#FFFBEB",
+            color: hideUncertain ? R.textSub : "#78350F",
+            border: "1px solid " + (hideUncertain ? R.border : "#FCD34D"),
+            borderRadius: 6, fontSize: 11.5, fontWeight: 500,
+            cursor: "pointer"
+          }
+        },
+          el("span", { style: { fontSize: 12 } }, hideUncertain ? "👁️‍🗨️" : "⚠️"),
+          el("span", null, hideUncertain ? "Ocultando " : "Mostrando "),
+          el("span", { style: { fontWeight: 700 } }, uncertainCount),
+          el("span", null, " incerta" + (uncertainCount === 1 ? "" : "s"))
+        ),
 
         // Ações à direita
         alerts.length > 0 && el("button", { onClick: () => setShowAlerts(true), style: {
@@ -6422,7 +6539,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
                         if (ath) athIds.push(ath.id);
                       }
                       const idSet = new Set(athIds);
-                      const scatterSnaps = snapshots.filter(sn =>
+                      const scatterSnaps = filteredSnapshots.filter(sn =>
                         sn.exercise === ex && sn.session_date >= dMin && sn.session_date <= dMax && idSet.has(sn.athlete_id)
                       );
                       return el(ChartErrorBoundary, null,
