@@ -882,7 +882,7 @@ function parseCSV(text, regNames) {
     if (mpv<0.15||mpv>3.5||load<20) return;
     // Métricas extras do CSV Output (todas opcionais)
     const meanPower = parseFloat(r["Mean Power (W)"] || r["Mean Power"] || r["MP"]);
-    const peakPower = parseFloat(r["Peak Power (W)"] || r["Peak Power"] || r["PP"]);
+    let peakPower = parseFloat(r["Peak Power (W)"] || r["Peak Power"] || r["PP"]);
     let peakPowerRel = parseFloat(r["Relative Peak Power (W/kg)"] || r["Peak Power Rel"]);
     let meanPowerRel = parseFloat(r["Relative Mean Power (W/kg)"] || r["Mean Power Rel"]);
     const peakVelocity = parseFloat(r["Peak Velocity (m/s)"] || r["Peak Velocity"] || r["PV"]);
@@ -891,13 +891,23 @@ function parseCSV(text, regNames) {
     // Peso corporal do dia (se CSV traz — Output Sports não traz por rep, mas pode vir)
     const bwSession = parseFloat(r["Body Weight (kg)"] || r["Body Weight"] || r["BW"]);
 
-    // Sanity check: peak_power_rel > 200 W/kg é fisiologicamente impossível em VBT — provável
-    // erro de export (valor absoluto em W entrando no campo relativo). Recalcula quando possível.
+    // BUG DO OUTPUT SPORTS (Trap Bar Deadlift): as colunas "Peak Power (W)" e "Relative Peak Power (W/kg)"
+    // vêm TROCADAS pra este exercício especificamente. Ex: PP=25 W (impossível — deveria ser ~1500) e
+    // Rel PP=1479 W/kg (impossível — deveria ser ~18). Detecta pelo padrão numérico e faz o swap antes
+    // de qualquer outro processamento. Cobre também outros exercícios se o mesmo padrão aparecer.
+    if (!isNaN(peakPower) && !isNaN(peakPowerRel) && peakPower < 100 && peakPowerRel > 200) {
+      const tmp = peakPower;
+      peakPower = peakPowerRel;
+      peakPowerRel = tmp;
+    }
+
+    // Sanity check adicional: se peak_power_rel > 200 W/kg (após swap), é fisiologicamente impossível.
+    // Tenta recalcular do peak_power (absoluto) ÷ body_weight; senão descarta.
     if (!isNaN(peakPowerRel) && peakPowerRel > 200) {
       if (!isNaN(peakPower) && !isNaN(bwSession) && bwSession > 30) {
         peakPowerRel = +(peakPower / bwSession).toFixed(2);
       } else {
-        peakPowerRel = NaN; // descarta dado suspeito se não dá pra recalcular
+        peakPowerRel = NaN;
       }
     }
     if (!isNaN(meanPowerRel) && meanPowerRel > 200) {
@@ -5653,6 +5663,18 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
             el("span", { style: { width: 12, height: 1.5, borderTop: "1.5px dashed #EF4444", display: "inline-block" } }),
             el("span", null, "Tendência linear (regressão linear — aparece quando há 3+ sessões)")
           ),
+          // Legenda das linhas de zona (verde=Elite / azul=Alto / amarelo=Médio) — só quando existe
+          (mp.chart_type !== "load_velocity") && c.zoneThresholds && el("div", { style: { fontSize: 8, color: "#525252", marginTop: 3, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 } },
+            el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+              el("span", { style: { width: 12, height: 0, borderTop: "1.5px dotted #10B981", display: "inline-block" } }),
+              el("span", null, "Elite (≥" + c.zoneThresholds[2] + ")")),
+            el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+              el("span", { style: { width: 12, height: 0, borderTop: "1.5px dotted #3B82F6", display: "inline-block" } }),
+              el("span", null, "Alto (" + c.zoneThresholds[1] + "–" + c.zoneThresholds[2] + ")")),
+            el("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+              el("span", { style: { width: 12, height: 0, borderTop: "1.5px dotted #F59E0B", display: "inline-block" } }),
+              el("span", null, "Médio (" + c.zoneThresholds[0] + "–" + c.zoneThresholds[1] + ")"))
+          ),
           c.referenceSource && (mp.chart_type !== "load_velocity") && el("div", { style: { fontSize: 8, color: "#A3A3A3", marginTop: 3, fontStyle: "italic" } }, "Referências: " + c.referenceSource)
         ))
       )
@@ -5854,6 +5876,17 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
     const base = hideUncertain ? snapshots.filter(hasReliableE1RM) : snapshots;
     return base.map(s => {
       const bw = s.body_weight_session;
+      // BUG DO OUTPUT SPORTS (Trap Bar Deadlift): peak_power e peak_power_rel vêm trocados no CSV.
+      // Detecta pelo padrão numérico e faz swap antes de qualquer outro processamento.
+      let pp = s.peak_power, ppr = s.peak_power_rel;
+      let mp = s.mean_power, mpr = s.mean_power_rel;
+      if (pp != null && ppr != null && pp < 100 && ppr > 200) {
+        [pp, ppr] = [ppr, pp];
+      }
+      if (mp != null && mpr != null && mp < 100 && mpr > 200) {
+        [mp, mpr] = [mpr, mp];
+      }
+
       const fixRel = (rel, abs) => {
         // Se valor relativo está null/undefined MAS tem valor absoluto e peso corporal, recalcula.
         // Cobre o caso do Trap Bar Deadlift em que o Output Sports não exporta a coluna relativa.
@@ -5868,10 +5901,10 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
         }
         return rel;
       };
-      const ppr = fixRel(s.peak_power_rel, s.peak_power);
-      const mpr = fixRel(s.mean_power_rel, s.mean_power);
-      if (ppr === s.peak_power_rel && mpr === s.mean_power_rel) return s;
-      return { ...s, peak_power_rel: ppr, mean_power_rel: mpr };
+      const pprFixed = fixRel(ppr, pp);
+      const mprFixed = fixRel(mpr, mp);
+      if (pp === s.peak_power && ppr === s.peak_power_rel && pprFixed === s.peak_power_rel && mprFixed === s.mean_power_rel) return s;
+      return { ...s, peak_power: pp, peak_power_rel: pprFixed, mean_power: mp, mean_power_rel: mprFixed };
     });
   }, [snapshots, hideUncertain]);
 
