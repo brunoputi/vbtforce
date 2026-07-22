@@ -5268,8 +5268,8 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
     );
   };
 
-  return el(RC.ResponsiveContainer, { width: "100%", height: 220 },
-    el(RC.ComposedChart, { data: dataset, margin: { top: 10, right: 15, left: 5, bottom: 5 } },
+  return el(RC.ResponsiveContainer, { width: "100%", height: 195 },
+    el(RC.ComposedChart, { data: dataset, margin: { top: 8, right: 15, left: 5, bottom: 5 } },
       el("defs", null,
         ...series.map((s, i) => {
           const color = s.isBenchmark ? "#737373" : REPORT_COLORS_PDF[i % REPORT_COLORS_PDF.length];
@@ -5612,21 +5612,23 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
   // Renderiza um bloco de métrica (compacto = versão pra 2 por página)
   const renderMetricBlock = (mp, compact) => {
     const isCompact = !!compact;
-    return el("div", { style: { display: "flex", flexDirection: "column", gap: isCompact ? 8 : 16 } },
+    // Detecta multi-exercício (3 gráficos empilhados) — precisa ainda mais compressão vertical
+    const isMultiEx = mp.chartsByEx && mp.chartsByEx.length >= 3;
+    return el("div", { style: { display: "flex", flexDirection: "column", gap: isCompact ? 6 : 12 } },
       // Cabeçalho da métrica
       el("div", null,
-        el("h2", { style: { fontSize: isCompact ? 16 : 22, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 3, color: "#0A0A0B" } }, mp.label),
-        el("div", { style: { fontSize: isCompact ? 10 : 11.5, color: "#737373", fontWeight: 500 } }, mp.subtitle)
+        el("h2", { style: { fontSize: isCompact ? 15 : (isMultiEx ? 18 : 22), fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 2, color: "#0A0A0B" } }, mp.label),
+        el("div", { style: { fontSize: isCompact ? 9.5 : 11, color: "#737373", fontWeight: 500 } }, mp.subtitle)
       ),
       // Descrição
-      el("div", { style: { fontSize: isCompact ? 9.5 : 11, color: "#525252", lineHeight: 1.5, padding: isCompact ? "8px 12px" : "12px 16px", background: "#FAFAFA", borderLeft: "3px solid #0A0A0B" } },
+      el("div", { style: { fontSize: isCompact ? 9 : (isMultiEx ? 10 : 11), color: "#525252", lineHeight: 1.4, padding: isCompact ? "6px 10px" : (isMultiEx ? "8px 12px" : "12px 16px"), background: "#FAFAFA", borderLeft: "3px solid #0A0A0B" } },
         mp.description),
       // Gráficos (normalmente 1 por métrica; multi-exercício adiciona mais)
-      el("div", { style: { display: "flex", flexDirection: "column", gap: isCompact ? 10 : 16 } },
+      el("div", { style: { display: "flex", flexDirection: "column", gap: isCompact ? 8 : (isMultiEx ? 10 : 16) } },
         ...mp.chartsByEx.map((c, ci) => el("div", { key: ci },
-          mp.chartsByEx.length > 1 && el("div", { style: { fontSize: 11, fontWeight: 600, color: "#0A0A0B", marginBottom: 6, letterSpacing: "-.01em", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+          mp.chartsByEx.length > 1 && el("div", { style: { fontSize: 10.5, fontWeight: 600, color: "#0A0A0B", marginBottom: 4, letterSpacing: "-.01em", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
             el("span", { style: { padding: "2px 8px", background: "#0A0A0B", color: "#fff", borderRadius: 3, fontSize: 9, letterSpacing: ".06em", textTransform: "uppercase" } }, c.exercise),
-            c.referenceValue != null && el("span", { style: { fontSize: 9.5, color: "#525252", fontWeight: 500 } },
+            c.referenceValue != null && el("span", { style: { fontSize: 9, color: "#525252", fontWeight: 500 } },
               (meta.mode === "posicao" ? "média posição: " : meta.mode === "grupo" ? "média categoria: " : "média time: ") + (c.referenceValue >= 100 ? c.referenceValue.toFixed(0) : c.referenceValue.toFixed(2)) + " " + mp.unit)
           ),
           (mp.chart_type === "load_velocity")
@@ -5868,6 +5870,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
   // Menos ruído nos gráficos e nas médias, mais fidelidade ao que o CT precisa ver.
   const [hideUncertain, setHideUncertain] = useState(true);
   const [showTrend, setShowTrend] = useState(true); // toggle: mostrar/ocultar linha de tendência linear
+  const [showDataAudit, setShowDataAudit] = useState(false); // painel de auditoria de dados
   const uncertainCount = useMemo(() => snapshots.filter(s => !hasReliableE1RM(s)).length, [snapshots]);
   // Além do filtro, corrige on-the-fly peak_power_rel/mean_power_rel absurdos (>200 W/kg — provável
   // erro histórico onde valor absoluto em Watts foi gravado no campo relativo). Snapshots antigos
@@ -6497,6 +6500,37 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
   };
 
 
+  // ─── PAINEL DE AUDITORIA DE DADOS ───
+  // Mostra por atleta quais métricas × exercícios têm dado e quais estão null/missing.
+  // Ajuda a rastrear casos como "Trap Bar Peak Power Rel está com — pra Alejandro apesar de ter sessões".
+  const dataAuditRows = useMemo(() => {
+    if (!showDataAudit) return [];
+    const [dMin, dMax] = dateRange;
+    const rows = [];
+    activeAthletes.forEach(ath => {
+      const athSnaps = filteredSnapshots.filter(s =>
+        s.athlete_id === ath.id && s.session_date >= dMin && s.session_date <= dMax
+      );
+      const perEx = {};
+      exercises.forEach(ex => {
+        const exSnaps = athSnaps.filter(s => s.exercise === ex);
+        const last = exSnaps.length ? exSnaps[exSnaps.length - 1] : null;
+        perEx[ex] = {
+          nSessions: exSnaps.length,
+          lastDate: last ? last.session_date : null,
+          e1rm: last ? last.e1rm : null,
+          peak_power_rel: last ? last.peak_power_rel : null,
+          peak_power: last ? last.peak_power : null,
+          body_weight_session: last ? last.body_weight_session : null,
+          peak_velocity: last ? last.peak_velocity : null,
+          max_load: last ? last.max_load : null
+        };
+      });
+      rows.push({ athlete: ath, perEx });
+    });
+    return rows;
+  }, [showDataAudit, activeAthletes, filteredSnapshots, dateRange, exercises]);
+
   return el("div", { style: { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", background: R.bg } },
     // ─── HEADER: filtros em linha com dropdowns ───
     el("div", { style: { padding: "12px 24px", background: "#fff", borderBottom: "1px solid " + R.border, flexShrink: 0, position: "relative", zIndex: 50 } },
@@ -6619,6 +6653,23 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
 
         // Spacer
         el("div", { style: { flex: 1, minWidth: 20 } }),
+
+        // Botão de auditoria — abre painel mostrando por atleta quais exercícios/métricas têm dado
+        el("button", {
+          onClick: () => setShowDataAudit(true),
+          title: "Ver quais atletas têm dados em cada exercício e onde tá faltando",
+          style: {
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "6px 10px", background: "#fff",
+            color: R.textSub,
+            border: "1px solid " + R.border,
+            borderRadius: 6, fontSize: 11.5, fontWeight: 500,
+            cursor: "pointer"
+          }
+        },
+          el("span", { style: { fontSize: 12 } }, "🔍"),
+          el("span", null, "Auditoria")
+        ),
 
         // Toggle: mostrar/ocultar linha de tendência (regressão linear vermelha)
         el("button", {
@@ -7069,6 +7120,80 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
                 );
               })
             )
+        )
+      )
+    ),
+
+    // ─── MODAL DE AUDITORIA DE DADOS ───
+    showDataAudit && el("div", {
+      onClick: () => setShowDataAudit(false),
+      style: { position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:400, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }
+    },
+      el("div", {
+        onClick: e => e.stopPropagation(),
+        style: { background:"#fff", borderRadius:12, maxWidth:1100, width:"100%", maxHeight:"90vh", display:"flex", flexDirection:"column", overflow:"hidden", boxShadow:"0 20px 60px rgba(0,0,0,0.2)" }
+      },
+        el("div", { style: { padding:"16px 22px", borderBottom:"1px solid "+R.border, display:"flex", justifyContent:"space-between", alignItems:"center" } },
+          el("div", null,
+            el("h2", { style: { fontSize:16, fontWeight:700, color:R.text, margin:0 } }, "Auditoria de Dados"),
+            el("div", { style: { fontSize:11, color:R.textMuted, marginTop:2 } }, "Última sessão de cada atleta por exercício no período — X = valor null/faltando")
+          ),
+          el("button", { onClick: () => setShowDataAudit(false), style: { background:"none", border:"none", fontSize:22, cursor:"pointer", color:R.textMuted } }, "×")
+        ),
+        el("div", { style: { overflow:"auto", padding:"12px 22px", flex:1 } },
+          el("table", { style: { width:"100%", fontSize:11, borderCollapse:"collapse", fontVariantNumeric:"tabular-nums" } },
+            el("thead", null,
+              el("tr", { style: { borderBottom:"2px solid "+R.text } },
+                el("th", { style: { textAlign:"left", padding:"8px 6px", fontWeight:700 } }, "Atleta"),
+                ...exercises.flatMap(ex => [
+                  el("th", { key: ex+"-h", colSpan: 6, style: { textAlign:"center", padding:"8px 6px", fontWeight:700, background:"#FAFAFA", borderLeft:"1px solid "+R.border } }, ex)
+                ])
+              ),
+              el("tr", { style: { borderBottom:"1px solid "+R.border, fontSize:9.5, color:R.textMuted, fontWeight:600, textTransform:"uppercase", letterSpacing:".04em" } },
+                el("th", null, ""),
+                ...exercises.flatMap(ex => [
+                  el("th", { key: ex+"-n", style: { textAlign:"right", padding:"4px 4px", borderLeft:"1px solid "+R.border } }, "n"),
+                  el("th", { key: ex+"-e", style: { textAlign:"right", padding:"4px 4px" } }, "e1RM"),
+                  el("th", { key: ex+"-pp", style: { textAlign:"right", padding:"4px 4px" } }, "PP"),
+                  el("th", { key: ex+"-ppr", style: { textAlign:"right", padding:"4px 4px" } }, "PP/kg"),
+                  el("th", { key: ex+"-vp", style: { textAlign:"right", padding:"4px 4px" } }, "VelP"),
+                  el("th", { key: ex+"-bw", style: { textAlign:"right", padding:"4px 4px" } }, "BW")
+                ])
+              )
+            ),
+            el("tbody", null,
+              ...dataAuditRows.map(row => el("tr", { key: row.athlete.id, style: { borderBottom:"1px solid "+R.border } },
+                el("td", { style: { padding:"6px 6px", fontWeight:600 } }, row.athlete.nickname || row.athlete.name),
+                ...exercises.flatMap(ex => {
+                  const d = row.perEx[ex];
+                  const cell = (v, digits) => {
+                    if (v == null) return el("td", { style: { textAlign:"right", padding:"4px 4px", color:"#EF4444", fontWeight:700 } }, "×");
+                    return el("td", { style: { textAlign:"right", padding:"4px 4px", color:R.text } }, digits === 0 ? Math.round(v) : v.toFixed(digits));
+                  };
+                  return [
+                    el("td", { key: ex+"-n", style: { textAlign:"right", padding:"4px 4px", borderLeft:"1px solid "+R.border, color:d.nSessions === 0 ? "#EF4444" : R.text, fontWeight: d.nSessions === 0 ? 700 : 400 } }, d.nSessions),
+                    cell(d.e1rm, 0),
+                    cell(d.peak_power, 0),
+                    cell(d.peak_power_rel, 1),
+                    cell(d.peak_velocity, 2),
+                    cell(d.body_weight_session, 0)
+                  ];
+                })
+              ))
+            )
+          )
+        ),
+        el("div", { style: { padding:"12px 22px", borderTop:"1px solid "+R.border, fontSize:10.5, color:R.textMuted, lineHeight:1.5, background:"#FAFAFA" } },
+          "Como ler: ",
+          el("strong", null, "n"), " = número de sessões do atleta no período · ",
+          el("strong", null, "e1RM"), " = carga máxima estimada · ",
+          el("strong", null, "PP"), " = Peak Power (W) · ",
+          el("strong", null, "PP/kg"), " = Peak Power Relativo · ",
+          el("strong", null, "VelP"), " = Peak Velocity · ",
+          el("strong", null, "BW"), " = peso corporal da sessão · ",
+          el("strong", { style: { color:"#EF4444" } }, "×"),
+          " = valor null (não está no snapshot). ",
+          "Célula com n=0 significa que atleta não fez esse exercício no período — o CT pode ter esquecido de importar CSV. Célula com n>0 mas PP/kg = × significa que o dado bruto do CSV falhou (bug no Output Sports ou reimport pendente)."
         )
       )
     )
