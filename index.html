@@ -4772,7 +4772,7 @@ function LoadVelocityScatter({ snaps, exercise, height, mode }) {
 }
 
 // LineChart usando Recharts com anotações contextuais
-function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresholds, zoneSource }) {
+function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresholds, zoneSource, showTrend: showTrendProp }) {
   const el = React.createElement;
   const RC = window.Recharts;
   if (!RC) return el("div", { style: { padding: 40, textAlign: "center", color: R.textMuted } }, "Carregando gráfico...");
@@ -4797,9 +4797,9 @@ function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresh
   });
 
   // Linha de tendência: regressão linear sobre a série principal (s0, não-benchmark)
-  // Menos "curva vaga", mais taxa clara de mudança. Só aparece com 3+ pontos.
+  // Menos "curva vaga", mais taxa clara de mudança. Só aparece com 3+ pontos e quando toggle ligado.
   const primaryIdx = series.findIndex(s => !s.isBenchmark);
-  const showTrend = primaryIdx >= 0 && dataset.length >= 3;
+  const showTrend = (showTrendProp !== false) && primaryIdx >= 0 && dataset.length >= 3;
   if (showTrend) {
     const pts = dataset
       .map((d, i) => ({ x: i, y: d["s" + primaryIdx] }))
@@ -5089,7 +5089,7 @@ function AlgorithmicAnalysisBlock({ findings }) {
   }},
     el("div", { style: { padding: "16px 20px 12px", borderBottom: "1px solid " + R.border, display: "flex", justifyContent: "space-between", alignItems: "flex-end" } },
       el("div", null,
-        el("h3", { style: { fontSize: 15, fontWeight: 600, color: R.text, margin: 0, letterSpacing: "-.01em" } }, "Análise automática"),
+        el("h3", { style: { fontSize: 15, fontWeight: 600, color: R.text, margin: 0, letterSpacing: "-.01em" } }, "Análise do grupo"),
         el("div", { style: { fontSize: 11, color: R.textSub, marginTop: 3 } },
           findings.length + " observaç" + (findings.length === 1 ? "ão" : "ões") + " baseadas em cruzamento de métricas + literatura VBT")
       ),
@@ -5189,7 +5189,7 @@ function PdfLoadVelocityScatter({ snaps, exercise, mode }) {
 }
 
 
-function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, zoneThresholds }) {
+function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, zoneThresholds, showTrend: showTrendProp }) {
   const el = React.createElement;
   const RC = window.Recharts;
   if (!RC || !series || series.length === 0) return el("div", { style: { padding: 60, textAlign: "center", color: "#A3A3A3", fontSize: 12, background: "#FAFAFA" } }, "Sem dados");
@@ -5208,7 +5208,7 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
 
   // Linha de tendência: regressão linear sobre a série principal
   const primaryIdxPdf = series.findIndex(s => !s.isBenchmark);
-  const showTrendPdf = primaryIdxPdf >= 0 && dataset.length >= 3;
+  const showTrendPdf = (showTrendProp !== false) && primaryIdxPdf >= 0 && dataset.length >= 3;
   if (showTrendPdf) {
     const pts = dataset
       .map((d, i) => ({ x: i, y: d["s" + primaryIdxPdf] }))
@@ -5438,7 +5438,7 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
           el("h3", { style: { fontSize: 13, fontWeight: 700, margin: 0, color: "#0A0A0B", letterSpacing: "-.01em" } }, exBlock.exercise),
           el("span", { style: { fontSize: 9, color: "#A3A3A3", letterSpacing: ".06em", textTransform: "uppercase", fontWeight: 600 } }, "indicadores do período")
         ),
-        el("div", { style: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 } },
+        el("div", { style: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 } },
           ...exBlock.metrics.map(md => {
             const hasDelta = md.deltaPct != null;
             const isUp = hasDelta && md.deltaPct > 1;
@@ -5447,15 +5447,15 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
             const zone = getReferenceZone(md.metric.key, exBlock.exercise, md.currentVal);
             const teamStat = meta.teamStats && meta.teamStats[exBlock.exercise] && meta.teamStats[exBlock.exercise][md.metric.key];
             const teamZone = teamStat && teamStat.percentiles ? getTeamZone(md.currentVal, teamStat.percentiles) : null;
-            return el("div", { key: md.metric.key, style: { padding: "10px 12px", background: "#FAFAFA", borderRadius: 6, position: "relative" } },
-              el("div", { style: { fontSize: 8, letterSpacing: ".06em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 6, minHeight: 18, lineHeight: 1.2 } },
+            return el("div", { key: md.metric.key, style: { padding: "8px 9px", background: "#FAFAFA", borderRadius: 6, position: "relative", overflow: "hidden" } },
+              el("div", { style: { fontSize: 7.5, letterSpacing: ".06em", textTransform: "uppercase", color: "#A3A3A3", fontWeight: 600, marginBottom: 5, minHeight: 18, lineHeight: 1.2 } },
                 (md.metric.label_kpi || md.metric.label).replace(/\s*\([^)]*\)/, "")),
               el("div", { style: { display: "flex", alignItems: "baseline", gap: 3, marginBottom: 4 } },
-                el("span", { style: { fontSize: 17, fontWeight: 600, letterSpacing: "-.02em", color: "#0A0A0B", lineHeight: 1 } },
+                el("span", { style: { fontSize: 15, fontWeight: 600, letterSpacing: "-.02em", color: "#0A0A0B", lineHeight: 1 } },
                   md.currentVal != null ? (md.currentVal >= 100 ? md.currentVal.toFixed(0) : md.currentVal.toFixed(2)) : "—"),
-                el("span", { style: { fontSize: 9, fontWeight: 400, color: "#A3A3A3" } }, md.metric.unit)
+                el("span", { style: { fontSize: 8, fontWeight: 400, color: "#A3A3A3" } }, md.metric.unit)
               ),
-              hasDelta && el("div", { style: { fontSize: 10, fontWeight: 500, color: deltaColor, marginBottom: 4 } },
+              hasDelta && el("div", { style: { fontSize: 9, fontWeight: 500, color: deltaColor, marginBottom: 3 } },
                 (md.deltaPct > 0 ? "↑ +" : md.deltaPct < 0 ? "↓ " : "→ ") + Math.abs(md.deltaPct).toFixed(1) + "%"),
 
               // Bloco de zonas (literatura + time, lado a lado quando ambos existem)
@@ -5529,57 +5529,56 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
       el("div", { style: pageContent },
         pageHeader("Panorama do Time"),
         el("h2", { style: { fontSize: 22, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 5, color: "#0A0A0B" } }, "Panorama do Time"),
-        el("div", { style: { fontSize: 11, color: "#737373", marginBottom: 20, fontWeight: 500 } },
+        el("div", { style: { fontSize: 11, color: "#737373", marginBottom: 14, fontWeight: 500 } },
           "Estatísticas agregadas do grupo · comparativo com literatura mundial e evolução temporal interna"),
-        el("div", { style: { display: "flex", flexDirection: "column", gap: 18 } },
+        el("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
           ...Object.keys(meta.teamStats).map(ex => {
             const exStats = meta.teamStats[ex];
             const metricsWithData = METRICS.filter(m => exStats[m.key] && (exStats[m.key].percentiles || exStats[m.key].evolution));
             if (metricsWithData.length === 0) return null;
-            return el("div", { key: ex, style: { padding: "14px 16px", background: "#FAFAFA", borderRadius: 8, borderLeft: "3px solid #0A0A0B" } },
-              el("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12 } },
-                el("span", { style: { padding: "3px 10px", background: "#0A0A0B", color: "#fff", borderRadius: 3, fontSize: 10, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase" } }, ex)
+            return el("div", { key: ex, style: { padding: "10px 12px", background: "#FAFAFA", borderRadius: 8, borderLeft: "3px solid #0A0A0B" } },
+              el("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8 } },
+                el("span", { style: { padding: "2px 8px", background: "#0A0A0B", color: "#fff", borderRadius: 3, fontSize: 9, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase" } }, ex)
               ),
-              el("div", { style: { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 } },
+              el("div", { style: { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 7 } },
                 ...metricsWithData.map(m => {
                   const st = exStats[m.key];
                   const p = st.percentiles;
                   const ev = st.evolution;
                   const litRef = REFERENCE_RANGES[m.key] && REFERENCE_RANGES[m.key][ex];
-                  // Zona da mediana do grupo em relação à literatura (quando existe)
                   const medianVsLit = (p && litRef) ? getReferenceZone(m.key, ex, p.p50) : null;
                   const evUp = ev && ev.deltaPct != null && ev.deltaPct > 1;
                   const evDown = ev && ev.deltaPct != null && ev.deltaPct < -1;
                   const evColor = evUp ? "#10B981" : evDown ? "#EF4444" : "#737373";
-                  return el("div", { key: m.key, style: { padding: "10px 12px", background: "#fff", borderRadius: 5, border: "1px solid #E5E5E5" } },
-                    el("div", { style: { fontSize: 8.5, letterSpacing: ".06em", textTransform: "uppercase", color: "#737373", fontWeight: 600, marginBottom: 6 } },
+                  return el("div", { key: m.key, style: { padding: "7px 10px", background: "#fff", borderRadius: 4, border: "1px solid #E5E5E5" } },
+                    el("div", { style: { fontSize: 7.5, letterSpacing: ".06em", textTransform: "uppercase", color: "#737373", fontWeight: 600, marginBottom: 4 } },
                       (m.label_kpi || m.label).replace(/\s*\([^)]*\)/, "")),
-                    p && el("div", { style: { display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 } },
-                      el("span", { style: { fontSize: 9, color: "#A3A3A3", fontWeight: 500 } }, "Mediana:"),
-                      el("span", { style: { fontSize: 15, fontWeight: 700, color: "#0A0A0B", fontVariantNumeric: "tabular-nums" } },
+                    p && el("div", { style: { display: "flex", alignItems: "baseline", gap: 5, marginBottom: 3 } },
+                      el("span", { style: { fontSize: 8, color: "#A3A3A3", fontWeight: 500 } }, "Mediana:"),
+                      el("span", { style: { fontSize: 13, fontWeight: 700, color: "#0A0A0B", fontVariantNumeric: "tabular-nums" } },
                         p.p50 >= 100 ? p.p50.toFixed(0) : p.p50.toFixed(2)),
-                      el("span", { style: { fontSize: 8.5, color: "#A3A3A3" } }, m.unit),
+                      el("span", { style: { fontSize: 8, color: "#A3A3A3" } }, m.unit),
                       medianVsLit && el("span", { style: {
-                        fontSize: 7.5, fontWeight: 700, padding: "1.5px 5px",
+                        fontSize: 7, fontWeight: 700, padding: "1px 5px",
                         background: medianVsLit.color + "20", color: medianVsLit.color,
                         borderRadius: 3, letterSpacing: ".05em", textTransform: "uppercase"
                       }}, medianVsLit.label)
                     ),
-                    p && el("div", { style: { fontSize: 8.5, color: "#525252", fontVariantNumeric: "tabular-nums", marginBottom: 5 } },
+                    p && el("div", { style: { fontSize: 8, color: "#525252", fontVariantNumeric: "tabular-nums", marginBottom: 3 } },
                       "P25: " + (p.p25 >= 100 ? p.p25.toFixed(0) : p.p25.toFixed(2)) +
                       " · P50: " + (p.p50 >= 100 ? p.p50.toFixed(0) : p.p50.toFixed(2)) +
                       " · P75: " + (p.p75 >= 100 ? p.p75.toFixed(0) : p.p75.toFixed(2)) +
                       "  (n=" + p.n + ")"
                     ),
-                    ev && ev.deltaPct != null && el("div", { style: { fontSize: 9, color: evColor, fontWeight: 600, marginTop: 3 } },
+                    ev && ev.deltaPct != null && el("div", { style: { fontSize: 8.5, color: evColor, fontWeight: 600, marginTop: 3 } },
                       "Evolução do grupo no período: ",
                       el("span", { style: { fontFamily: "inherit" } },
                         (ev.deltaPct > 0 ? "↑ +" : ev.deltaPct < 0 ? "↓ " : "→ ") + Math.abs(ev.deltaPct).toFixed(1) + "%"),
                       el("span", { style: { color: "#A3A3A3", fontWeight: 400, marginLeft: 5 } },
-                        "(1ª metade: " + (ev.medianEarly >= 100 ? ev.medianEarly.toFixed(0) : ev.medianEarly.toFixed(2)) +
-                        " → 2ª metade: " + (ev.medianLate >= 100 ? ev.medianLate.toFixed(0) : ev.medianLate.toFixed(2)) + ")")
+                        "(Início: " + (ev.medianEarly >= 100 ? ev.medianEarly.toFixed(0) : ev.medianEarly.toFixed(2)) +
+                        " → Fim: " + (ev.medianLate >= 100 ? ev.medianLate.toFixed(0) : ev.medianLate.toFixed(2)) + ")")
                     ),
-                    litRef && el("div", { style: { fontSize: 7.5, color: "#A3A3A3", marginTop: 4, fontStyle: "italic" } },
+                    litRef && el("div", { style: { fontSize: 7, color: "#A3A3A3", marginTop: 3, fontStyle: "italic" } },
                       "Ref. literatura: " + litRef.source
                     )
                   );
@@ -5628,7 +5627,8 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
                 series: c.series, unit: mp.unit,
                 referenceValue: c.referenceValue,
                 referenceLabel: c.referenceLabel,
-                zoneThresholds: c.zoneThresholds
+                zoneThresholds: c.zoneThresholds,
+                showTrend: meta.showTrend
               }),
           // Legenda específica do scatter Load-Velocity (mantida — traz info não repetida)
           (mp.chart_type === "load_velocity") && c.scatterSnaps && c.scatterSnaps.some(s => s.sets_data) && el("div", { style: { marginTop: 6, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, fontSize: 9, color: "#525252" } },
@@ -5662,20 +5662,23 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
   // Divide as métricas: scatter fica sozinho, resto agrupa 2 a 2
   const scatterMetrics = chartsPerMetric.filter(mp => mp.chart_type === "load_velocity");
   const regularMetrics = chartsPerMetric.filter(mp => mp.chart_type !== "load_velocity");
-  // Agrupa regulares 2 a 2
+  // Estratégia de packing: se tem 3+ exercícios, cada métrica ocupa 1 página inteira (3 gráficos empilhados).
+  // Se tem 1-2 exercícios, empilha 2 métricas por página (compact) — sobra espaço.
+  const numExercises = (regularMetrics[0] && regularMetrics[0].chartsByEx.length) || 1;
+  const groupSize = numExercises >= 3 ? 1 : 2;
   const regularPairs = [];
-  for (let i = 0; i < regularMetrics.length; i += 2) {
-    regularPairs.push(regularMetrics.slice(i, i + 2));
+  for (let i = 0; i < regularMetrics.length; i += groupSize) {
+    regularPairs.push(regularMetrics.slice(i, i + groupSize));
   }
 
-  // 1) Páginas com 2 métricas empilhadas
+  // 1) Páginas com métrica(s) — quantidade depende de packing acima
   regularPairs.forEach(pair => {
     pages.push(el("div", { className: "pdf-page", style: pageStyle },
       el("div", { style: pageContent },
         pageHeader("Evolução"),
         el("div", { style: { display: "flex", flexDirection: "column", gap: 22, flex: 1 } },
           ...pair.map((mp, i) => el(React.Fragment, { key: i },
-            renderMetricBlock(mp, true),
+            renderMetricBlock(mp, groupSize === 2), // compact mode só quando empilha 2
             i === 0 && pair.length > 1 && el("div", { style: { height: 1, background: "#E5E5E5", margin: "4px 0" } })
           ))
         )
@@ -5751,9 +5754,9 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
   // PÁGINA FINAL — ANÁLISE AGRUPADA + METODOLOGIA (juntas numa só)
   pages.push(el("div", { className: "pdf-page", style: pageStyle },
     el("div", { style: pageContent },
-      pageHeader("Análise automática & Metodologia"),
-      // ─── Bloco 1: Análise automática ───
-      el("h2", { style: { fontSize: 20, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 5, color: "#0A0A0B" } }, "Análise automática"),
+      pageHeader("Análise do grupo & Metodologia"),
+      // ─── Bloco 1: Análise do grupo ───
+      el("h2", { style: { fontSize: 20, fontWeight: 700, letterSpacing: "-.02em", margin: 0, marginBottom: 5, color: "#0A0A0B" } }, "Análise do grupo"),
       el("div", { style: { fontSize: 10.5, color: "#737373", marginBottom: 16, fontWeight: 500 } }, "Achados agrupados por padrão · baseados em cruzamento de métricas + literatura VBT"),
       el("div", { style: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 } },
         ...groupedFindings.map((g, i) => {
@@ -5842,6 +5845,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
   // Filtro de qualidade de e1RM — default: ocultar estimativas incertas
   // Menos ruído nos gráficos e nas médias, mais fidelidade ao que o CT precisa ver.
   const [hideUncertain, setHideUncertain] = useState(true);
+  const [showTrend, setShowTrend] = useState(true); // toggle: mostrar/ocultar linha de tendência linear
   const uncertainCount = useMemo(() => snapshots.filter(s => !hasReliableE1RM(s)).length, [snapshots]);
   // Além do filtro, corrige on-the-fly peak_power_rel/mean_power_rel absurdos (>200 W/kg — provável
   // erro histórico onde valor absoluto em Watts foi gravado no campo relativo). Snapshots antigos
@@ -5851,9 +5855,18 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
     return base.map(s => {
       const bw = s.body_weight_session;
       const fixRel = (rel, abs) => {
-        if (rel == null || rel <= 200) return rel;
-        if (abs != null && bw != null && bw > 30) return +(abs / bw).toFixed(2);
-        return null; // não plotável, evita gráfico louco
+        // Se valor relativo está null/undefined MAS tem valor absoluto e peso corporal, recalcula.
+        // Cobre o caso do Trap Bar Deadlift em que o Output Sports não exporta a coluna relativa.
+        if (rel == null || isNaN(rel)) {
+          if (abs != null && bw != null && bw > 30) return +(abs / bw).toFixed(2);
+          return null;
+        }
+        // Se valor relativo está absurdamente alto (>200 W/kg), é dado corrompido — recalcula ou descarta.
+        if (rel > 200) {
+          if (abs != null && bw != null && bw > 30) return +(abs / bw).toFixed(2);
+          return null;
+        }
+        return rel;
       };
       const ppr = fixRel(s.peak_power_rel, s.peak_power);
       const mpr = fixRel(s.mean_power_rel, s.mean_power);
@@ -6389,7 +6402,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
         return grouped;
       })();
 
-      const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx, kpisPerExercise, comparisonPerExercise, mode, clubLogoUrl, hideUncertain, uncertainCount, teamStats };
+      const meta = { exercisesLabel, scopeLabel, periodStr, today, targetEx, kpisPerExercise, comparisonPerExercise, mode, clubLogoUrl, hideUncertain, uncertainCount, teamStats, showTrend };
 
       // Cria container oculto e renderiza PdfLayout
       // NOTA: usa left:0 + z-index:-999 (sem opacity:0!) pra Recharts poder medir dimensões.
@@ -6573,6 +6586,25 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
 
         // Spacer
         el("div", { style: { flex: 1, minWidth: 20 } }),
+
+        // Toggle: mostrar/ocultar linha de tendência (regressão linear vermelha)
+        el("button", {
+          onClick: () => setShowTrend(v => !v),
+          title: showTrend
+            ? "Linha de tendência (regressão linear) visível. Clique pra ocultar."
+            : "Linha de tendência oculta. Clique pra mostrar.",
+          style: {
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "6px 10px", background: showTrend ? "#FEF2F2" : "#fff",
+            color: showTrend ? "#991B1B" : R.textSub,
+            border: "1px solid " + (showTrend ? "#FCA5A5" : R.border),
+            borderRadius: 6, fontSize: 11.5, fontWeight: 500,
+            cursor: "pointer"
+          }
+        },
+          el("span", { style: { fontSize: 12 } }, showTrend ? "📈" : "📉"),
+          el("span", null, showTrend ? "Tendência on" : "Tendência off")
+        ),
 
         // Toggle: ocultar/mostrar sessões com estimativa incerta de e1RM
         uncertainCount > 0 && el("button", {
@@ -6856,7 +6888,8 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
                       el(LineChart, {
                         series: seriesWithBench, height: isMulti ? 260 : 380, unit: primEx.metric.unit, showArea: true,
                         showAnnotations: primEx.series.length === 1 && !bench,
-                        zoneThresholds: refRange ? refRange.thresholds : null
+                        zoneThresholds: refRange ? refRange.thresholds : null,
+                        showTrend: showTrend
                       }),
                       refRange && el("div", { style: { marginTop: 8, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, fontSize: 10.5, color: R.textSub } },
                         el("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } },
