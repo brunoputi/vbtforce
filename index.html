@@ -907,13 +907,29 @@ function parseCSV(text, regNames) {
     if (!EXERCISES.includes(ex)||!name||isNaN(load)||isNaN(mpv)) return;
     if (mpv<0.15||mpv>3.5||load<20) return;
     // Métricas extras do CSV Output (todas opcionais)
-    const meanPower = parseFloat(r["Mean Power (W)"] || r["Mean Power"] || r["MP"]);
+    let meanPower = parseFloat(r["Mean Power (W)"] || r["Mean Power"] || r["MP"]);
     let peakPower = parseFloat(r["Peak Power (W)"] || r["Peak Power"] || r["PP"]);
     let peakPowerRel = parseFloat(r["Relative Peak Power (W/kg)"] || r["Peak Power Rel"]);
     let meanPowerRel = parseFloat(r["Relative Mean Power (W/kg)"] || r["Mean Power Rel"]);
     const peakVelocity = parseFloat(r["Peak Velocity (m/s)"] || r["Peak Velocity"] || r["PV"]);
-    const meanForce = parseFloat(r["Mean Force (N)"] || r["Mean Force"]);
-    const peakForce = parseFloat(r["Peak Force (N)"] || r["Peak Force"]);
+    let meanForce = parseFloat(r["Mean Force (N)"] || r["Mean Force"]);
+    let peakForce = parseFloat(r["Peak Force (N)"] || r["Peak Force"]);
+    const peakForceRel = parseFloat(r["Relative Peak Force (N/kg)"] || r["Peak Force Rel"]);
+
+    // BUG DO OUTPUT SPORTS (Trap Bar Deadlift): Peak Force/Mean Force vêm em ordem de
+    // grandeza fisicamente impossível pra este exercício (~10-60N pra cargas de 80-140kg,
+    // quando o esperado é 800-3000N). Investigado em 23/07/2026: não é swap de coluna
+    // (trocar Peak Force ↔ Relative Peak Force não reconcilia — resultado ainda fica
+    // abaixo do peso estático da carga). Trap Bar Deadlift também é o único exercício
+    // com Vertical Displacement/Concentric Time/Duration 100% ausentes no CSV, indicando
+    // que o sensor não captura cinemática completa pra esse exercício — o canal de força
+    // não é confiável na origem. Anula os campos pra não gravar lixo em sets_data (Supabase)
+    // enquanto o export/config do Output Sports pra Trap Bar não for revisado com o fornecedor.
+    // Peak Power / Relative Peak Power NÃO são afetados (validados corretos após o swap-fix acima).
+    if (ex === "Trap Bar Deadlift") {
+      meanForce = NaN;
+      peakForce = NaN;
+    }
     // Peso corporal do dia (se CSV traz — Output Sports não traz por rep, mas pode vir)
     const bwSession = parseFloat(r["Body Weight (kg)"] || r["Body Weight"] || r["BW"]);
 
@@ -942,6 +958,52 @@ function parseCSV(text, regNames) {
       } else {
         meanPowerRel = NaN;
       }
+    }
+
+    // ARTEFATO DE SENSOR (Back Squat / Hip Thrust): investigado em 23/07/2026 a partir de
+    // relatos de Potência Pico Relativa muito acima da literatura em alguns atletas (ex:
+    // 98-127 W/kg quando o esperado é até ~34). Causa: ~2.5% dos reps têm Peak Force com
+    // ordem de grandeza fisiologicamente impossível (até 9950N — 5-7x o valor normal pra
+    // mesma carga), só nesse subconjunto de reps, não no dataset inteiro (mediana e p95
+    // gerais batem com a literatura). Não é troca de coluna: tempo concêntrico e deslocamento
+    // desses reps são normais, e o valor SÓ aparece nos campos de Força/Potência. Assinatura
+    // consistente com pico de aceleração espúrio do sensor (ruído na transição excêntrico→
+    // concêntrico ou folga no cabo), não erro de exportação. Já testado: o limiar de swap
+    // (>200 W/kg) não pega esses casos porque ficam abaixo dele (40-130 W/kg).
+    // Fix: usa Relative Peak Force (N/kg) — que vem pronto no CSV, não precisa de BW pra
+    // calcular — como gate de plausibilidade fisiológica. Corta em 40 N/kg (~4x peso
+    // corporal), bem acima de qualquer valor da literatura pra agachamento/hip thrust
+    // carregado (~15-35 N/kg no dataset real). Reps reprovados têm Peak/Mean Power(+Rel)
+    // anulados — a carga e a MPV continuam válidas pro perfil load-velocity/e1RM, que não
+    // dependem desse sensor. NÃO se aplica ao Trap Bar Deadlift: lá o canal de força inteiro
+    // já é anulado antes (bug diferente, sistêmico, ver comentário acima).
+    const FORCE_PLAUSIBILITY_CUTOFF_N_PER_KG = 40;
+    if (ex !== "Trap Bar Deadlift" && !isNaN(peakForceRel) && peakForceRel > FORCE_PLAUSIBILITY_CUTOFF_N_PER_KG) {
+      peakPower = NaN; peakPowerRel = NaN;
+      meanPower = NaN; meanPowerRel = NaN;
+    }
+
+    // ARTEFATO DE SENSOR, camada 2 (Back Squat / Hip Thrust): investigado em 23/07/2026 a
+    // partir do caso Portilla — Peak Force (37.8 N/kg) e Peak Velocity (1.95 m/s) do rep
+    // individualmente plausíveis, dentro do limiar da camada 1 acima, mas a Potência de pico
+    // reportada (66.6 W/kg) continua muito acima da literatura. Hipótese: o sensor calcula
+    // o pico de potência como F(t)×V(t) num instante da repetição diferente de onde capturou
+    // os picos de força e velocidade reportados separadamente — um ruído momentâneo nesse
+    // instante específico não aparece nem em Peak Force nem em Peak Velocity isolados, só na
+    // Potência. Fix: teto direto em Potência Pico Relativa, por exercício, = limiar "Elite" já
+    // definido em REFERENCE_RANGES.peak_power_rel × 1.7 (Back Squat 28→~48 W/kg, Hip Thrust
+    // 30→~51 W/kg — mantido em sincronia manual com REFERENCE_RANGES; se mudar um, checar o
+    // outro). Fator escolhido com folga generosa acima de qualquer valor documentado em
+    // Loturco et al. pra agachamento/hip thrust carregado com barra. Mais arbitrário que o
+    // filtro de força (não é "fisicamente impossível", é "muito improvável dado a literatura
+    // do próprio time") — risco pequeno de cortar um dia excepcional legítimo, aceito
+    // deliberadamente dado que os valores cortados ficam 2-4x acima do teto documentado.
+    // Não mexe em agregação (aggregate:"max" continua correto pra e1RM/carga/potência —
+    // "melhor rep da sessão" é a prática padrão de VBT, o problema era o dado, não o método).
+    const POWER_PLAUSIBILITY_CEILING_W_PER_KG = { "Back Squat": 47.6, "Hip Thrust": 51.0 };
+    const powerCeiling = POWER_PLAUSIBILITY_CEILING_W_PER_KG[ex];
+    if (powerCeiling && !isNaN(peakPowerRel) && peakPowerRel > powerCeiling) {
+      peakPower = NaN; peakPowerRel = NaN;
     }
     // Data da sessão
     const date = parseDate(
@@ -1017,7 +1079,15 @@ function parseCSV(text, regNames) {
           peak_power: peakPowers.length ? Math.round(Math.max(...peakPowers)) : null,
           peak_power_rel: peakPowerRels.length ? +Math.max(...peakPowerRels).toFixed(2) : null,
           mean_power_rel: meanPowerRels.length ? +(meanPowerRels.reduce((s,v)=>s+v,0)/meanPowerRels.length).toFixed(2) : null,
-          peak_velocity: peakVelocities.length ? +Math.max(...peakVelocities).toFixed(3) : +maxMpv.toFixed(3),
+          // Ajustado em 23/07/2026: usa Mean Propulsive Velocity (MPV) em vez do campo bruto
+          // "Peak Velocity (m/s)" do sensor. Motivo: Peak Velocity é uma leitura instantânea,
+          // mais suscetível a ruído/artefato do sensor (mesma família de problema encontrada
+          // em Peak Force/Peak Power); MPV é o padrão de literatura pra VBT (Sánchez-Medina,
+          // González-Badillo) e já é o que o gráfico de Perfil Load-Velocity usa. Isso deixa
+          // o card de KPI, a tabela comparativa, o painel de auditoria e a análise algorítmica
+          // consistentes com o gráfico — antes eles liam o campo bruto do sensor e só caíam
+          // pra MPV quando o dado bruto estava ausente.
+          peak_velocity: +maxMpv.toFixed(3),
           max_mpv: +maxMpv.toFixed(3),
           min_velocity: +minMpv.toFixed(3),
           body_weight_session: bwSessions.length ? +(bwSessions.reduce((s,v)=>s+v,0)/bwSessions.length).toFixed(1) : null,
@@ -4582,12 +4652,12 @@ const METRICS = [
   {
     key: "peak_velocity",
     label: "Perfil Load-Velocity",
-    label_kpi: "Velocidade Pico (m/s)",
+    label_kpi: "Velocidade Propulsiva Média (m/s)",
     subtitle: "Curva velocidade × %1RM (evolução do perfil neuromuscular)",
-    description: "Cada ponto é uma repetição (%1RM da sessão × MPV medida). Sessões antigas em cinza, recentes em preto. As linhas mostram a curva média de cada período — quando a linha preta fica acima da cinza em cargas iguais, houve ganho real de força-velocidade. A linha vermelha tracejada é a curva de referência da literatura (quando disponível).",
+    description: "Cada ponto é uma repetição (%1RM da sessão × MPV medida). Sessões antigas em cinza, recentes em preto. As linhas mostram a curva média de cada período — quando a linha preta fica acima da cinza em cargas iguais, houve ganho real de força-velocidade. A linha vermelha tracejada é a curva de referência da literatura (quando disponível). KPI e tabela usam a melhor MPV (Mean Propulsive Velocity) da sessão — não a Peak Velocity bruta do sensor, que é mais suscetível a ruído.",
     unit: "m/s",
     chart_type: "load_velocity",
-    getValue: (snap) => snap.peak_velocity || snap.max_mpv,
+    getValue: (snap) => snap.peak_velocity,
     aggregate: "max"
   },
   {
@@ -5807,7 +5877,7 @@ function PdfLayout({ meta, executiveSummary, metricsData, comparisonRows, groupe
               el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "e1RM (kg)"),
               el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Força Rel."),
               el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Pot. W/kg"),
-              el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Vel. Pico"),
+              el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Vel. Prop. Média"),
               el("th", { style: { textAlign: "right", padding: "8px 6px", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "#737373", fontWeight: 600 } }, "Carga Máx")
             )
           ),
