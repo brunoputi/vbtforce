@@ -615,15 +615,41 @@ function nameScore(a, b) {
   const ta=tokens(a), tb=tokens(b);
   const setA=new Set(ta), setB=new Set(tb);
   if (ta.every(t=>setB.has(t)) && tb.every(t=>setA.has(t))) return 95;
+
+  // Regra subset: se TODOS os tokens do menor estão no maior, é match forte.
+  // Resolve casos como "Gilberto Moraes Júnior" (CSV) vs "Gilberto Moraes" (banco) — 
+  // que antes falhava por causa do "Júnior" virar último token diferente.
+  const smaller = ta.length <= tb.length ? ta : tb;
+  const larger = ta.length <= tb.length ? setB : setA;
+  if (smaller.length >= 2 && smaller.every(t => larger.has(t))) return 90;
+
   // Caso especial: 1 dos nomes tem só 1 token (típico de apelido/nome curto)
   if (ta.length === 1 && tb.length > 1 && setB.has(ta[0])) return 85;
   if (tb.length === 1 && ta.length > 1 && setA.has(tb[0])) return 85;
+
+  // Regra fuzzy prefix pro primeiro nome: apelido com sufixo diminutivo
+  // ("Claudinho" ↔ "Claudio", "Ronaldinho" ↔ "Ronaldo"). Se o primeiro token de um
+  // começa com o mesmo prefixo de 5+ letras do primeiro token do outro E o resto do
+  // apelido bate no nome longo, é match razoável.
+  const prefixMatch = (short, long) => {
+    if (short.length !== 1 || long.length < 2) return false;
+    const s = short[0], firstLong = long[0];
+    if (s.length < 6 || firstLong.length < 4) return false;
+    const minLen = Math.min(s.length, firstLong.length);
+    let sharedPrefix = 0;
+    for (let i = 0; i < minLen; i++) {
+      if (s[i] === firstLong[i]) sharedPrefix++;
+      else break;
+    }
+    return sharedPrefix >= 4; // "Claudio" e "Claudinho" compartilham 6 letras
+  };
+  if (prefixMatch(ta, tb) || prefixMatch(tb, ta)) return 75;
+
   // Caso "Gilberto M." vs "Gilberto Moraes Junior":
   // primeiro token bate + algum token do outro lado começa com a inicial
   const initialMatch = (short, long) => {
     if (short.length < 2 || long.length < 2) return false;
     if (short[0] !== long[0]) return false;
-    // Segundo token do short é inicial (1 letra) que bate início de algum token do long
     const initial = short[1];
     if (initial.length !== 1) return false;
     return long.slice(1).some(t => t.startsWith(initial));
@@ -2706,6 +2732,14 @@ function AthletesView({athletes,setAthletes,profiles,setProfiles,saveAthlete,del
     const reader=new FileReader();
     reader.onload=async ev=>{
       const {profiles:newP,log:newLog,snapshots:snapArr}=parseCSV(ev.target.result,athletes.map(a=>a.name));
+      // Persiste log de import no localStorage pra o painel de auditoria acessar depois
+      try {
+        localStorage.setItem('vbtforce_import_log', JSON.stringify({
+          timestamp: new Date().toISOString(),
+          totalCsvNames: newLog.length,
+          entries: newLog
+        }));
+      } catch(e) { console.warn("localStorage cheio, log de import não salvo"); }
       const result = await saveProfiles(newP, athletes, snapArr);
       setLog(newLog); setImporting(false);
       const msg = "Importação concluída:\n\n" +
@@ -4421,21 +4455,21 @@ function getReferenceZone(metricKey, exercise, value) {
 // Pega o valor mais recente de cada atleta ativo com pelo menos 1 sessão no período.
 // Precisa de n≥8 pra ter estatística mínima confiável.
 // Retorna null se não tiver dados suficientes.
-function computeTeamPercentiles(snapshots, metricKey, exercise, activeAthletes, dateRange, metricDef) {
+function computeTeamPercentiles(snapshots, metricKey, exercise, activeAthletes, dateRange, metricDef, athleteById) {
   if (!metricDef || !metricDef.getValue) return null;
   const [dMin, dMax] = dateRange || ["", "\uffff"];
-  const activeIds = new Set(activeAthletes.map(a => a.id));
+  const idMap = athleteById || (new Map(activeAthletes.map(a => [a.id, a])));
   const byAthlete = new Map();
   snapshots.forEach(s => {
     if (s.exercise !== exercise) return;
-    if (!activeIds.has(s.athlete_id)) return;
+    if (!idMap.has(s.athlete_id)) return;
     if (s.session_date < dMin || s.session_date > dMax) return;
     const cur = byAthlete.get(s.athlete_id);
     if (!cur || s.session_date > cur.session_date) byAthlete.set(s.athlete_id, s);
   });
   const values = [];
   byAthlete.forEach((snap, athId) => {
-    const ath = activeAthletes.find(a => a.id === athId);
+    const ath = idMap.get(athId);
     const v = metricDef.getValue(snap, ath);
     if (v != null && !isNaN(v) && isFinite(v)) values.push(v);
   });
@@ -4476,12 +4510,12 @@ function getTeamZone(value, percentiles) {
 }
 
 // Compara evolução temporal do grupo — mediana da 1ª metade vs 2ª metade do período
-function computeTeamEvolution(snapshots, metricKey, exercise, activeAthletes, dateRange, metricDef) {
+function computeTeamEvolution(snapshots, metricKey, exercise, activeAthletes, dateRange, metricDef, athleteById) {
   if (!metricDef || !metricDef.getValue) return null;
   const [dMin, dMax] = dateRange || ["", "\uffff"];
-  const activeIds = new Set(activeAthletes.map(a => a.id));
+  const idMap = athleteById || (new Map(activeAthletes.map(a => [a.id, a])));
   const relevantSnaps = snapshots.filter(s =>
-    s.exercise === exercise && activeIds.has(s.athlete_id) &&
+    s.exercise === exercise && idMap.has(s.athlete_id) &&
     s.session_date >= dMin && s.session_date <= dMax
   );
   if (relevantSnaps.length < 12) return null;
@@ -4491,7 +4525,7 @@ function computeTeamEvolution(snapshots, metricKey, exercise, activeAthletes, da
   const midDate = dates[midIdx];
   const early = [], late = [];
   relevantSnaps.forEach(s => {
-    const ath = activeAthletes.find(a => a.id === s.athlete_id);
+    const ath = idMap.get(s.athlete_id);
     const v = metricDef.getValue(s, ath);
     if (v == null || !isFinite(v)) return;
     (s.session_date < midDate ? early : late).push(v);
@@ -4903,7 +4937,22 @@ function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresh
         y: avgValue, stroke: "#A3A3A3", strokeDasharray: "3 3", strokeWidth: 1,
         label: { value: "média " + avgValue.toFixed(avgValue >= 100 ? 0 : 2), position: "insideTopRight", fontSize: 9, fill: "#737373", fontWeight: 500 }
       }),
-      // Linhas de zona (faixas da literatura) — sem label na linha (fica na legenda embaixo)
+      // Bandas coloridas de fundo — só quando há referência da literatura.
+      // Cada zona vira uma ReferenceArea horizontal com opacity baixa. A zona Elite
+      // se estende até o topo do gráfico (dataMax); a zona Abaixo até 0.
+      zoneThresholds && el(RC.ReferenceArea, {
+        y1: 0, y2: zoneThresholds[0], fill: "#EF4444", fillOpacity: 0.06, ifOverflow: "extendDomain"
+      }),
+      zoneThresholds && el(RC.ReferenceArea, {
+        y1: zoneThresholds[0], y2: zoneThresholds[1], fill: "#F59E0B", fillOpacity: 0.06
+      }),
+      zoneThresholds && el(RC.ReferenceArea, {
+        y1: zoneThresholds[1], y2: zoneThresholds[2], fill: "#3B82F6", fillOpacity: 0.06
+      }),
+      zoneThresholds && el(RC.ReferenceArea, {
+        y1: zoneThresholds[2], y2: 99999, fill: "#10B981", fillOpacity: 0.06, ifOverflow: "extendDomain"
+      }),
+      // Linhas de zona (thresholds da literatura) — sem label na linha (fica na legenda embaixo)
       zoneThresholds && el(RC.ReferenceLine, {
         y: zoneThresholds[0], stroke: "#F59E0B", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7
       }),
@@ -4929,7 +4978,7 @@ function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresh
           connectNulls: true,
           animationDuration: 600
         };
-        if (showArea && !s.isBenchmark) {
+        if (showArea && !s.isBenchmark && !zoneThresholds) {
           props.fill = "url(#gradS" + i + ")";
           props.fillOpacity = 0.6;
         }
@@ -5297,6 +5346,20 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
         y: referenceValue, stroke: "#737373", strokeWidth: 1.2, strokeDasharray: "6 4",
         label: { value: (referenceLabel || "Média") + " " + (referenceValue >= 100 ? referenceValue.toFixed(0) : referenceValue.toFixed(2)), position: "insideTopRight", fontSize: 9, fill: "#737373", fontWeight: 600 }
       }),
+      // Bandas coloridas de fundo — só quando há referência da literatura.
+      // Renderizadas ANTES das linhas e da série pra ficar como camada de fundo.
+      zoneThresholds && el(RC.ReferenceArea, {
+        y1: 0, y2: zoneThresholds[0], fill: "#EF4444", fillOpacity: 0.07, ifOverflow: "extendDomain"
+      }),
+      zoneThresholds && el(RC.ReferenceArea, {
+        y1: zoneThresholds[0], y2: zoneThresholds[1], fill: "#F59E0B", fillOpacity: 0.07
+      }),
+      zoneThresholds && el(RC.ReferenceArea, {
+        y1: zoneThresholds[1], y2: zoneThresholds[2], fill: "#3B82F6", fillOpacity: 0.07
+      }),
+      zoneThresholds && el(RC.ReferenceArea, {
+        y1: zoneThresholds[2], y2: 99999, fill: "#10B981", fillOpacity: 0.07, ifOverflow: "extendDomain"
+      }),
       // Linhas de zona (thresholds da literatura) — sem label na linha (fica na legenda embaixo do gráfico)
       zoneThresholds && el(RC.ReferenceLine, {
         y: zoneThresholds[0], stroke: "#F59E0B", strokeWidth: 1, strokeDasharray: "2 4", opacity: 0.7
@@ -5313,7 +5376,8 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
           key: i, type: "monotone", dataKey: "s" + i, name: s.name,
           stroke: color, strokeWidth: s.isBenchmark ? 1.2 : 1.5,
           strokeDasharray: s.isBenchmark ? "5 4" : "0",
-          fill: s.isBenchmark ? "transparent" : "rgba(10,10,11,0.03)",
+          // Quando há bandas coloridas de zona, não pinta área abaixo da linha pra não conflitar
+          fill: (s.isBenchmark || zoneThresholds) ? "transparent" : "rgba(10,10,11,0.03)",
           dot: false,
           isAnimationActive: false, connectNulls: true
         });
@@ -5865,50 +5929,58 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
   const [showAlerts, setShowAlerts] = useState(false);
 
   const activeAthletes = useMemo(() => athletes.filter(a => a.status === "ativo"), [athletes]);
+  // Index O(1) para lookups athlete_id → athlete — evita .find() em loops (O(N×A))
+  const athleteById = useMemo(() => {
+    const m = new Map();
+    activeAthletes.forEach(a => m.set(a.id, a));
+    return m;
+  }, [activeAthletes]);
 
   // Filtro de qualidade de e1RM — default: ocultar estimativas incertas
   // Menos ruído nos gráficos e nas médias, mais fidelidade ao que o CT precisa ver.
   const [hideUncertain, setHideUncertain] = useState(true);
   const [showTrend, setShowTrend] = useState(true); // toggle: mostrar/ocultar linha de tendência linear
   const [showDataAudit, setShowDataAudit] = useState(false); // painel de auditoria de dados
+  const [pdfProgress, setPdfProgress] = useState(null); // { current, total } quando gerando PDF
   const uncertainCount = useMemo(() => snapshots.filter(s => !hasReliableE1RM(s)).length, [snapshots]);
   // Além do filtro, corrige on-the-fly peak_power_rel/mean_power_rel absurdos (>200 W/kg — provável
   // erro histórico onde valor absoluto em Watts foi gravado no campo relativo). Snapshots antigos
   // com esse bug ficam com o valor recalculado a partir de peak_power/body_weight quando possível.
   const filteredSnapshots = useMemo(() => {
     const base = hideUncertain ? snapshots.filter(hasReliableE1RM) : snapshots;
-    return base.map(s => {
+    let changedCount = 0;
+    const result = base.map(s => {
       const bw = s.body_weight_session;
-      // BUG DO OUTPUT SPORTS (Trap Bar Deadlift): peak_power e peak_power_rel vêm trocados no CSV.
-      // Detecta pelo padrão numérico e faz swap antes de qualquer outro processamento.
       let pp = s.peak_power, ppr = s.peak_power_rel;
       let mp = s.mean_power, mpr = s.mean_power_rel;
+      let needsChange = false;
+
+      // BUG DO OUTPUT SPORTS: detecta swap
       if (pp != null && ppr != null && pp < 100 && ppr > 200) {
         [pp, ppr] = [ppr, pp];
+        needsChange = true;
       }
       if (mp != null && mpr != null && mp < 100 && mpr > 200) {
         [mp, mpr] = [mpr, mp];
+        needsChange = true;
       }
 
-      const fixRel = (rel, abs) => {
-        // Se valor relativo está null/undefined MAS tem valor absoluto e peso corporal, recalcula.
-        // Cobre o caso do Trap Bar Deadlift em que o Output Sports não exporta a coluna relativa.
-        if (rel == null || isNaN(rel)) {
-          if (abs != null && bw != null && bw > 30) return +(abs / bw).toFixed(2);
-          return null;
-        }
-        // Se valor relativo está absurdamente alto (>200 W/kg), é dado corrompido — recalcula ou descarta.
-        if (rel > 200) {
-          if (abs != null && bw != null && bw > 30) return +(abs / bw).toFixed(2);
-          return null;
-        }
-        return rel;
-      };
-      const pprFixed = fixRel(ppr, pp);
-      const mprFixed = fixRel(mpr, mp);
-      if (pp === s.peak_power && ppr === s.peak_power_rel && pprFixed === s.peak_power_rel && mprFixed === s.mean_power_rel) return s;
-      return { ...s, peak_power: pp, peak_power_rel: pprFixed, mean_power: mp, mean_power_rel: mprFixed };
+      // Recalcula relativos se null ou absurdos (>200)
+      if (ppr == null || isNaN(ppr) || ppr > 200) {
+        const newVal = (pp != null && bw != null && bw > 30) ? +(pp / bw).toFixed(2) : null;
+        if (newVal !== ppr) { ppr = newVal; needsChange = true; }
+      }
+      if (mpr == null || isNaN(mpr) || mpr > 200) {
+        const newVal = (mp != null && bw != null && bw > 30) ? +(mp / bw).toFixed(2) : null;
+        if (newVal !== mpr) { mpr = newVal; needsChange = true; }
+      }
+
+      if (!needsChange) return s;
+      changedCount++;
+      return { ...s, peak_power: pp, peak_power_rel: ppr, mean_power: mp, mean_power_rel: mpr };
     });
+    if (changedCount > 0) console.log("[filteredSnapshots] fixed " + changedCount + " snapshots");
+    return result;
   }, [snapshots, hideUncertain]);
 
   // Range de datas
@@ -5978,7 +6050,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
 
     if (mode === "atleta") {
       return selected.map(athId => {
-        const ath = activeAthletes.find(a => a.id === athId);
+        const ath = athleteById.get(athId);
         if (!ath) return null;
         // Agrupa por dia, pega valor máximo do dia
         const byDate = {};
@@ -6017,7 +6089,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
       if (athIds.length === 0) return { name: key, points: [] };
       const byDate = {};
       relevantSnaps.filter(s => athIds.includes(s.athlete_id)).forEach(s => {
-        const ath = activeAthletes.find(a => a.id === s.athlete_id);
+        const ath = athleteById.get(s.athlete_id);
         const val = metric.getValue(s, ath);
         if (val == null) return;
         if (!byDate[s.session_date]) byDate[s.session_date] = [];
@@ -6042,7 +6114,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
     let benchLabel = "";
     if (benchmarkType === "athlete" && benchmarkAthlete) {
       athIds = [benchmarkAthlete];
-      const ath = activeAthletes.find(a => a.id === benchmarkAthlete);
+      const ath = athleteById.get(benchmarkAthlete);
       benchLabel = "Referência: " + (ath ? (ath.nickname || ath.name) : "?");
     } else if (benchmarkType === "team_avg" || benchmarkType === "team_max") {
       // Escopo do benchmark segue o modo/seleção ativa
@@ -6066,7 +6138,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
 
     const byDate = {};
     relevantSnaps.filter(s => athIds.includes(s.athlete_id)).forEach(s => {
-      const ath = activeAthletes.find(a => a.id === s.athlete_id);
+      const ath = athleteById.get(s.athlete_id);
       const val = metric.getValue(s, ath);
       if (val == null) return;
       if (!byDate[s.session_date]) byDate[s.session_date] = [];
@@ -6088,7 +6160,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
     // Média do time no período
     const teamVals = [];
     relevantSnaps.forEach(s => {
-      const ath = activeAthletes.find(a => a.id === s.athlete_id);
+      const ath = athleteById.get(s.athlete_id);
       if (!ath) return;
       const v = metric.getValue(s, ath);
       if (v != null) teamVals.push(v);
@@ -6106,7 +6178,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
     );
     let athletesToShow = [];
     if (mode === "atleta") {
-      athletesToShow = selected.map(id => activeAthletes.find(a => a.id === id)).filter(Boolean);
+      athletesToShow = selected.map(id => athleteById.get(id)).filter(Boolean);
     } else if (mode === "posicao") {
       selected.forEach(pos => {
         activeAthletes.filter(a => a.position === pos).forEach(a => athletesToShow.push(a));
@@ -6253,13 +6325,13 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
     exList.forEach(ex => {
       stats[ex] = {};
       METRICS.forEach(m => {
-        const percentiles = computeTeamPercentiles(filteredSnapshots, m.key, ex, activeAthletes, dateRange, m);
-        const evolution = computeTeamEvolution(filteredSnapshots, m.key, ex, activeAthletes, dateRange, m);
+        const percentiles = computeTeamPercentiles(filteredSnapshots, m.key, ex, activeAthletes, dateRange, m, athleteById);
+        const evolution = computeTeamEvolution(filteredSnapshots, m.key, ex, activeAthletes, dateRange, m, athleteById);
         stats[ex][m.key] = { percentiles, evolution };
       });
     });
     return stats;
-  }, [mode, exercises, exercise, filteredSnapshots, activeAthletes, dateRange]);
+  }, [mode, exercises, exercise, filteredSnapshots, activeAthletes, dateRange, athleteById]);
 
   // ── Resumo executivo automático ──
   const executiveSummary = useMemo(() => {
@@ -6341,7 +6413,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
         const ids = new Set(athIds);
         const vals = [];
         relevant.filter(s => ids.has(s.athlete_id)).forEach(s => {
-          const ath = activeAthletes.find(a => a.id === s.athlete_id);
+          const ath = athleteById.get(s.athlete_id);
           const v = metric.getValue(s, ath);
           if (v != null) vals.push(v);
         });
@@ -6378,7 +6450,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
             } else if (mode === "grupo") {
               selected.forEach(cat => activeAthletes.filter(a => (a.categories || []).includes(cat)).forEach(a => athIds.push(a.id)));
             } else {
-              const ath = activeAthletes.find(a => a.id === selected[0]);
+              const ath = athleteById.get(selected[0]);
               if (ath) athIds.push(ath.id);
             }
             const idSet = new Set(athIds);
@@ -6464,13 +6536,11 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
         const start = Date.now();
         while (Date.now() - start < maxWait) {
           const rendered = container.querySelectorAll(".pdf-page .recharts-wrapper");
-          // Considera pronto quando todos containers têm wrapper interno
           if (rendered.length >= expectedCharts.length && rendered.length > 0) {
-            // Extra 300ms pra animações e labels terminarem
-            await new Promise(r => setTimeout(r, 300));
+            await new Promise(r => setTimeout(r, 200));
             return;
           }
-          await new Promise(r => setTimeout(r, 100));
+          await new Promise(r => setTimeout(r, 80));
         }
         console.warn("Timeout aguardando Recharts renderizar");
       };
@@ -6482,21 +6552,22 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
 
       for (let i = 0; i < pages.length; i++) {
         if (i > 0) pdf.addPage();
-        // Pequena pausa entre capturas pra não travar
-        if (i > 0) await new Promise(r => setTimeout(r, 100));
+        setPdfProgress({ current: i + 1, total: pages.length });
+        // Qualidade top: scale 1.8 e JPEG 0.94 — fica quase indistinguível de PNG mas ~40% menor
         const pageCanvas = await window.html2canvas(pages[i], {
-          scale: 1.5, backgroundColor: "#ffffff", useCORS: true, logging: false,
+          scale: 1.8, backgroundColor: "#ffffff", useCORS: true, logging: false,
           windowWidth: 794, windowHeight: 1123
         });
-        const imgData = pageCanvas.toDataURL("image/jpeg", 0.85);
+        const imgData = pageCanvas.toDataURL("image/jpeg", 0.94);
         pdf.addImage(imgData, "JPEG", 0, 0, 210, 297);
       }
 
       root.unmount();
       document.body.removeChild(container);
+      setPdfProgress(null);
 
       pdf.save("relatorio-cap-" + targetEx.replace(/\s+/g, "-").toLowerCase() + "-" + new Date().toISOString().slice(0,10) + ".pdf");
-    } catch(e) { console.error("Erro PDF:", e); alert("Erro ao gerar PDF: " + e.message); }
+    } catch(e) { console.error("Erro PDF:", e); setPdfProgress(null); alert("Erro ao gerar PDF: " + e.message); }
   };
 
 
@@ -6582,7 +6653,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
           const modeLabel = mode === "atleta" ? "Atleta" : mode === "grupo" ? "Categoria" : "Posição";
           const selectorLabel = mode === "atleta" ? "Atletas" : mode === "grupo" ? "Categorias" : "Posições";
           const selectorValue = selected.length === 0 ? "nenhum" : selected.length === 1
-            ? (mode === "atleta" ? (activeAthletes.find(a => a.id === selected[0]) || {}).nickname || (activeAthletes.find(a => a.id === selected[0]) || {}).name || "?"
+            ? (mode === "atleta" ? (athleteById.get(selected[0]) || {}).nickname || (athleteById.get(selected[0]) || {}).name || "?"
                 : selected[0])
             : selected.length + " selecionados";
           const periodLabel = period === "30d" ? "30 dias" : period === "90d" ? "90 dias" : period === "temporada" ? "Temporada" : "Custom";
@@ -6954,7 +7025,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
                       } else if (mode === "grupo") {
                         selected.forEach(cat => activeAthletes.filter(a => (a.categories || []).includes(cat)).forEach(a => athIds.push(a.id)));
                       } else {
-                        const ath = activeAthletes.find(a => a.id === selected[0]);
+                        const ath = athleteById.get(selected[0]);
                         if (ath) athIds.push(ath.id);
                       }
                       const idSet = new Set(athIds);
@@ -7124,6 +7195,23 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
       )
     ),
 
+    // ─── PROGRESS OVERLAY DO PDF ───
+    pdfProgress && el("div", {
+      style: { position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:500, display:"flex", alignItems:"center", justifyContent:"center" }
+    },
+      el("div", { style: { background:"#fff", borderRadius:12, padding:"28px 36px", minWidth:280, textAlign:"center", boxShadow:"0 20px 60px rgba(0,0,0,0.3)" } },
+        el("div", { style: { fontSize:14, fontWeight:700, color:R.text, marginBottom:6 } }, "Gerando PDF..."),
+        el("div", { style: { fontSize:11, color:R.textMuted, marginBottom:14 } }, "Página " + pdfProgress.current + " de " + pdfProgress.total),
+        // Barra de progresso
+        el("div", { style: { height:6, background:"#F3F4F6", borderRadius:3, overflow:"hidden" } },
+          el("div", { style: {
+            width: (pdfProgress.current / pdfProgress.total * 100) + "%",
+            height:"100%", background:"#0A0A0B", transition:"width .3s"
+          } })
+        )
+      )
+    ),
+
     // ─── MODAL DE AUDITORIA DE DADOS ───
     showDataAudit && el("div", {
       onClick: () => setShowDataAudit(false),
@@ -7133,12 +7221,52 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
         onClick: e => e.stopPropagation(),
         style: { background:"#fff", borderRadius:12, maxWidth:1100, width:"100%", maxHeight:"90vh", display:"flex", flexDirection:"column", overflow:"hidden", boxShadow:"0 20px 60px rgba(0,0,0,0.2)" }
       },
-        el("div", { style: { padding:"16px 22px", borderBottom:"1px solid "+R.border, display:"flex", justifyContent:"space-between", alignItems:"center" } },
-          el("div", null,
-            el("h2", { style: { fontSize:16, fontWeight:700, color:R.text, margin:0 } }, "Auditoria de Dados"),
-            el("div", { style: { fontSize:11, color:R.textMuted, marginTop:2 } }, "Última sessão de cada atleta por exercício no período — X = valor null/faltando")
+        el("div", { style: { padding:"16px 22px", borderBottom:"1px solid "+R.border } },
+          el("div", { style: { display:"flex", justifyContent:"space-between", alignItems:"flex-start" } },
+            el("div", null,
+              el("h2", { style: { fontSize:16, fontWeight:700, color:R.text, margin:0 } }, "Auditoria de Dados"),
+              el("div", { style: { fontSize:11, color:R.textMuted, marginTop:2 } }, "Última sessão de cada atleta por exercício no período — X = valor null/faltando")
+            ),
+            el("button", { onClick: () => setShowDataAudit(false), style: { background:"none", border:"none", fontSize:22, cursor:"pointer", color:R.textMuted } }, "×")
           ),
-          el("button", { onClick: () => setShowDataAudit(false), style: { background:"none", border:"none", fontSize:22, cursor:"pointer", color:R.textMuted } }, "×")
+          // Botão pra abrir/fechar o painel de mapeamento CSV
+          (() => {
+            let importLog = null;
+            try {
+              const raw = localStorage.getItem('vbtforce_import_log');
+              if (raw) importLog = JSON.parse(raw);
+            } catch(e) {}
+            if (!importLog || !importLog.entries) return null;
+            const failed = importLog.entries.filter(e => e.type === "novo" || (e.score != null && e.score < 80));
+            return el("details", { style: { marginTop: 10, background: failed.length > 0 ? "#FEF3C7" : "#F0FDF4", border: "1px solid " + (failed.length > 0 ? "#FCD34D" : "#86EFAC"), borderRadius: 6, padding: "8px 12px" } },
+              el("summary", { style: { cursor: "pointer", fontSize: 11.5, fontWeight: 600, color: failed.length > 0 ? "#78350F" : "#166534" } },
+                failed.length > 0
+                  ? "⚠️ " + failed.length + " de " + importLog.entries.length + " nomes do CSV NÃO fizeram match perfeito (clique pra ver)"
+                  : "✓ Todos os " + importLog.entries.length + " nomes do CSV fizeram match com atletas cadastrados"
+              ),
+              failed.length > 0 && el("div", { style: { marginTop: 10, maxHeight: 200, overflow: "auto" } },
+                el("table", { style: { width: "100%", fontSize: 10.5, borderCollapse: "collapse" } },
+                  el("thead", null, el("tr", { style: { borderBottom: "1px solid #FCD34D" } },
+                    el("th", { style: { textAlign: "left", padding: "4px 6px" } }, "Nome no CSV"),
+                    el("th", { style: { textAlign: "left", padding: "4px 6px" } }, "Match sugerido"),
+                    el("th", { style: { textAlign: "right", padding: "4px 6px" } }, "Score"),
+                    el("th", { style: { textAlign: "right", padding: "4px 6px" } }, "Status")
+                  )),
+                  el("tbody", null,
+                    ...failed.map((e, i) => el("tr", { key: i, style: { borderBottom: "1px solid #FDE68A" } },
+                      el("td", { style: { padding: "4px 6px", fontFamily: "monospace" } }, e.csvName),
+                      el("td", { style: { padding: "4px 6px" } }, e.type === "novo" ? "— (não achou)" : e.registeredName),
+                      el("td", { style: { padding: "4px 6px", textAlign: "right", fontVariantNumeric: "tabular-nums" } }, e.score != null ? e.score : "-"),
+                      el("td", { style: { padding: "4px 6px", textAlign: "right", fontWeight: 600, color: e.type === "novo" ? "#DC2626" : "#78350F" } }, e.type === "novo" ? "SEM MATCH" : "duvidoso")
+                    ))
+                  )
+                ),
+                el("div", { style: { marginTop: 8, fontSize: 10, color: "#78350F", fontStyle: "italic" } },
+                  "Nomes 'SEM MATCH' viraram atletas novos (fantasma) no import. Nomes 'duvidoso' com score baixo podem ter sido atribuídos ao atleta errado. Renomeie o cadastro no banco de dados pra bater melhor com o Full Name do CSV, ou ajuste manualmente."
+                )
+              )
+            );
+          })()
         ),
         el("div", { style: { overflow:"auto", padding:"12px 22px", flex:1 } },
           el("table", { style: { width:"100%", fontSize:11, borderCollapse:"collapse", fontVariantNumeric:"tabular-nums" } },
