@@ -5936,9 +5936,9 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
     return m;
   }, [activeAthletes]);
 
-  // Filtro de qualidade de e1RM — default: ocultar estimativas incertas
-  // Menos ruído nos gráficos e nas médias, mais fidelidade ao que o CT precisa ver.
-  const [hideUncertain, setHideUncertain] = useState(true);
+  // Filtro de qualidade de e1RM — default DESLIGADO pra não esconder dados legítimos.
+  // O CT pode ligar manualmente se quiser filtrar sessões com estimativa incerta.
+  const [hideUncertain, setHideUncertain] = useState(false);
   const [showTrend, setShowTrend] = useState(true); // toggle: mostrar/ocultar linha de tendência linear
   const [showDataAudit, setShowDataAudit] = useState(false); // painel de auditoria de dados
   const [pdfProgress, setPdfProgress] = useState(null); // { current, total } quando gerando PDF
@@ -6577,17 +6577,24 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
   const dataAuditRows = useMemo(() => {
     if (!showDataAudit) return [];
     const [dMin, dMax] = dateRange;
+    const filteredIds = new Set(filteredSnapshots.map(s => s.session_date + "|" + s.athlete_id + "|" + s.exercise));
     const rows = [];
     activeAthletes.forEach(ath => {
-      const athSnaps = filteredSnapshots.filter(s =>
+      // IMPORTANTE: usa snapshots BRUTO (não filteredSnapshots) — pra o usuário ver a verdade.
+      // O filtro de qualidade estava escondendo dados legítimos.
+      const athSnapsRaw = snapshots.filter(s =>
         s.athlete_id === ath.id && s.session_date >= dMin && s.session_date <= dMax
       );
       const perEx = {};
       exercises.forEach(ex => {
-        const exSnaps = athSnaps.filter(s => s.exercise === ex);
-        const last = exSnaps.length ? exSnaps[exSnaps.length - 1] : null;
+        const exSnapsRaw = athSnapsRaw.filter(s => s.exercise === ex);
+        const exSnapsFiltered = exSnapsRaw.filter(s => filteredIds.has(s.session_date + "|" + s.athlete_id + "|" + s.exercise));
+        const last = exSnapsFiltered.length ? exSnapsFiltered[exSnapsFiltered.length - 1] :
+                     exSnapsRaw.length ? exSnapsRaw[exSnapsRaw.length - 1] : null;
         perEx[ex] = {
-          nSessions: exSnaps.length,
+          nSessionsRaw: exSnapsRaw.length,
+          nSessionsFiltered: exSnapsFiltered.length,
+          nHidden: exSnapsRaw.length - exSnapsFiltered.length,
           lastDate: last ? last.session_date : null,
           e1rm: last ? last.e1rm : null,
           peak_power_rel: last ? last.peak_power_rel : null,
@@ -6600,7 +6607,7 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
       rows.push({ athlete: ath, perEx });
     });
     return rows;
-  }, [showDataAudit, activeAthletes, filteredSnapshots, dateRange, exercises]);
+  }, [showDataAudit, activeAthletes, snapshots, filteredSnapshots, dateRange, exercises]);
 
   return el("div", { style: { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden", background: R.bg } },
     // ─── HEADER: filtros em linha com dropdowns ───
@@ -6722,27 +6729,52 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
           );
         })(),
 
-        // Spacer
-        el("div", { style: { flex: 1, minWidth: 20 } }),
+        // Spacer empurra ações principais pra direita
+        el("div", { style: { flex: 1, minWidth: 8 } }),
 
-        // Botão de auditoria — abre painel mostrando por atleta quais exercícios/métricas têm dado
+        // Ações principais (sempre visíveis à direita da linha 1)
+        alerts.length > 0 && el("button", { onClick: () => setShowAlerts(true), style: {
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "6px 10px", background: "#fff", color: R.text,
+          border: "1px solid " + R.border, borderRadius: 6, fontSize: 11.5, fontWeight: 500,
+          cursor: "pointer", flexShrink: 0
+        }},
+          el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: R.negative, display: "inline-block" } }),
+          el("span", null, alerts.length)
+        ),
+        selected.length > 0 && el("button", { onClick: exportPDF, style: {
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "6px 14px", background: R.text, color: "#fff",
+          border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600,
+          cursor: "pointer", flexShrink: 0
+        }},
+          Icon.Download(12, "#fff"),
+          el("span", null, "Gerar PDF")
+        )
+      ),
+
+      // ─── LINHA 2: Toggles auxiliares (auditoria, tendência, filtro de qualidade) ───
+      el("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10, paddingTop: 10, borderTop: "1px dashed " + R.border } },
+        el("span", { style: { fontSize: 10, color: R.textMuted, letterSpacing: ".05em", textTransform: "uppercase", fontWeight: 600, marginRight: 4 } }, "Opções:"),
+
+        // Botão de auditoria
         el("button", {
           onClick: () => setShowDataAudit(true),
           title: "Ver quais atletas têm dados em cada exercício e onde tá faltando",
           style: {
             display: "flex", alignItems: "center", gap: 6,
-            padding: "6px 10px", background: "#fff",
+            padding: "5px 10px", background: "#fff",
             color: R.textSub,
             border: "1px solid " + R.border,
-            borderRadius: 6, fontSize: 11.5, fontWeight: 500,
+            borderRadius: 5, fontSize: 11, fontWeight: 500,
             cursor: "pointer"
           }
         },
-          el("span", { style: { fontSize: 12 } }, "🔍"),
-          el("span", null, "Auditoria")
+          el("span", { style: { fontSize: 11 } }, "🔍"),
+          el("span", null, "Auditoria de dados")
         ),
 
-        // Toggle: mostrar/ocultar linha de tendência (regressão linear vermelha)
+        // Toggle: mostrar/ocultar linha de tendência
         el("button", {
           onClick: () => setShowTrend(v => !v),
           title: showTrend
@@ -6750,18 +6782,18 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
             : "Linha de tendência oculta. Clique pra mostrar.",
           style: {
             display: "flex", alignItems: "center", gap: 6,
-            padding: "6px 10px", background: showTrend ? "#FEF2F2" : "#fff",
+            padding: "5px 10px", background: showTrend ? "#FEF2F2" : "#fff",
             color: showTrend ? "#991B1B" : R.textSub,
             border: "1px solid " + (showTrend ? "#FCA5A5" : R.border),
-            borderRadius: 6, fontSize: 11.5, fontWeight: 500,
+            borderRadius: 5, fontSize: 11, fontWeight: 500,
             cursor: "pointer"
           }
         },
-          el("span", { style: { fontSize: 12 } }, showTrend ? "📈" : "📉"),
+          el("span", { style: { fontSize: 11 } }, showTrend ? "📈" : "📉"),
           el("span", null, showTrend ? "Tendência on" : "Tendência off")
         ),
 
-        // Toggle: ocultar/mostrar sessões com estimativa incerta de e1RM
+        // Toggle: filtro de qualidade
         uncertainCount > 0 && el("button", {
           onClick: () => setHideUncertain(v => !v),
           title: hideUncertain
@@ -6769,37 +6801,17 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
             : "Mostrando todas as " + uncertainCount + " sessão(ões) com estimativa incerta. Clique pra ocultar.",
           style: {
             display: "flex", alignItems: "center", gap: 6,
-            padding: "6px 10px", background: hideUncertain ? "#fff" : "#FFFBEB",
+            padding: "5px 10px", background: hideUncertain ? "#fff" : "#FFFBEB",
             color: hideUncertain ? R.textSub : "#78350F",
             border: "1px solid " + (hideUncertain ? R.border : "#FCD34D"),
-            borderRadius: 6, fontSize: 11.5, fontWeight: 500,
+            borderRadius: 5, fontSize: 11, fontWeight: 500,
             cursor: "pointer"
           }
         },
-          el("span", { style: { fontSize: 12 } }, hideUncertain ? "👁️‍🗨️" : "⚠️"),
+          el("span", { style: { fontSize: 11 } }, hideUncertain ? "👁️‍🗨️" : "⚠️"),
           el("span", null, hideUncertain ? "Ocultando " : "Mostrando "),
           el("span", { style: { fontWeight: 700 } }, uncertainCount),
           el("span", null, " incerta" + (uncertainCount === 1 ? "" : "s"))
-        ),
-
-        // Ações à direita
-        alerts.length > 0 && el("button", { onClick: () => setShowAlerts(true), style: {
-          display: "flex", alignItems: "center", gap: 6,
-          padding: "6px 10px", background: "#fff", color: R.text,
-          border: "1px solid " + R.border, borderRadius: 6, fontSize: 11.5, fontWeight: 500,
-          cursor: "pointer"
-        }},
-          el("span", { style: { width: 6, height: 6, borderRadius: "50%", background: R.negative, display: "inline-block" } }),
-          el("span", null, alerts.length)
-        ),
-        selected.length > 0 && el("button", { onClick: exportPDF, style: {
-          display: "flex", alignItems: "center", gap: 6,
-          padding: "6px 12px", background: R.text, color: "#fff",
-          border: "none", borderRadius: 6, fontSize: 11.5, fontWeight: 500,
-          cursor: "pointer"
-        }},
-          Icon.Download(11, "#fff"),
-          el("span", null, "PDF")
         )
       )
     ),
@@ -7299,7 +7311,14 @@ function ReportsView({ athletes, snapshots, clubLogoUrl }) {
                     return el("td", { style: { textAlign:"right", padding:"4px 4px", color:R.text } }, digits === 0 ? Math.round(v) : v.toFixed(digits));
                   };
                   return [
-                    el("td", { key: ex+"-n", style: { textAlign:"right", padding:"4px 4px", borderLeft:"1px solid "+R.border, color:d.nSessions === 0 ? "#EF4444" : R.text, fontWeight: d.nSessions === 0 ? 700 : 400 } }, d.nSessions),
+                    el("td", { key: ex+"-n", style: { textAlign:"right", padding:"4px 4px", borderLeft:"1px solid "+R.border, color:d.nSessionsRaw === 0 ? "#EF4444" : R.text, fontWeight: d.nSessionsRaw === 0 ? 700 : 400 } },
+                      d.nHidden > 0
+                        ? el(React.Fragment, null,
+                            el("span", null, d.nSessionsRaw),
+                            el("span", { title: d.nHidden + " sessão(ões) escondidas pelo filtro de qualidade", style: { fontSize: 8, color:"#F59E0B", marginLeft: 3, fontWeight: 700 } }, "(-" + d.nHidden + ")")
+                          )
+                        : d.nSessionsRaw
+                    ),
                     cell(d.e1rm, 0),
                     cell(d.peak_power, 0),
                     cell(d.peak_power_rel, 1),
