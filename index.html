@@ -4941,7 +4941,7 @@ function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresh
       // Cada zona vira uma ReferenceArea horizontal com opacity baixa. A zona Elite
       // se estende até o topo do gráfico (dataMax); a zona Abaixo até 0.
       zoneThresholds && el(RC.ReferenceArea, {
-        y1: 0, y2: zoneThresholds[0], fill: "#EF4444", fillOpacity: 0.06, ifOverflow: "extendDomain"
+        y1: -99999, y2: zoneThresholds[0], fill: "#EF4444", fillOpacity: 0.06, ifOverflow: "hidden"
       }),
       zoneThresholds && el(RC.ReferenceArea, {
         y1: zoneThresholds[0], y2: zoneThresholds[1], fill: "#F59E0B", fillOpacity: 0.06
@@ -4950,7 +4950,7 @@ function LineChart({ series, height, unit, showArea, showAnnotations, zoneThresh
         y1: zoneThresholds[1], y2: zoneThresholds[2], fill: "#3B82F6", fillOpacity: 0.06
       }),
       zoneThresholds && el(RC.ReferenceArea, {
-        y1: zoneThresholds[2], y2: 99999, fill: "#10B981", fillOpacity: 0.06, ifOverflow: "extendDomain"
+        y1: zoneThresholds[2], y2: 99999, fill: "#10B981", fillOpacity: 0.06, ifOverflow: "hidden"
       }),
       // Linhas de zona (thresholds da literatura) — sem label na linha (fica na legenda embaixo)
       zoneThresholds && el(RC.ReferenceLine, {
@@ -5349,7 +5349,7 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
       // Bandas coloridas de fundo — só quando há referência da literatura.
       // Renderizadas ANTES das linhas e da série pra ficar como camada de fundo.
       zoneThresholds && el(RC.ReferenceArea, {
-        y1: 0, y2: zoneThresholds[0], fill: "#EF4444", fillOpacity: 0.07, ifOverflow: "extendDomain"
+        y1: -99999, y2: zoneThresholds[0], fill: "#EF4444", fillOpacity: 0.07, ifOverflow: "hidden"
       }),
       zoneThresholds && el(RC.ReferenceArea, {
         y1: zoneThresholds[0], y2: zoneThresholds[1], fill: "#F59E0B", fillOpacity: 0.07
@@ -5358,7 +5358,7 @@ function PdfChartMini({ series, unit, showArea, referenceValue, referenceLabel, 
         y1: zoneThresholds[1], y2: zoneThresholds[2], fill: "#3B82F6", fillOpacity: 0.07
       }),
       zoneThresholds && el(RC.ReferenceArea, {
-        y1: zoneThresholds[2], y2: 99999, fill: "#10B981", fillOpacity: 0.07, ifOverflow: "extendDomain"
+        y1: zoneThresholds[2], y2: 99999, fill: "#10B981", fillOpacity: 0.07, ifOverflow: "hidden"
       }),
       // Linhas de zona (thresholds da literatura) — sem label na linha (fica na legenda embaixo do gráfico)
       zoneThresholds && el(RC.ReferenceLine, {
