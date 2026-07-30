@@ -114,6 +114,36 @@ footer{margin-top:26px; color:var(--gray-dim); font-size:11px; line-height:1.6;}
 #floatTooltip .tt-title{font-weight:700; font-size:11.5px; margin-bottom:2px;}
 #floatTooltip .tt-row{color:#C7C8CB; font-size:10.5px;}
 #floatTooltip .tt-row b{color:#fff; font-weight:600;}
+@media (max-width: 760px){
+  .wrap{padding:16px 12px 40px;}
+  header{flex-direction:column; align-items:flex-start; gap:10px;}
+  .title-block h1{font-size:24px;}
+  .title-block p{font-size:11px;}
+  .pdf-btn{width:100%; text-align:center;}
+
+  .controls-bar{flex-direction:column;}
+  .ctrl-cluster{flex-wrap:wrap; border-right:none; border-bottom:1px solid var(--line); width:100%;}
+  .ctrl-cluster:last-child{margin-left:0;}
+  .ctrl{flex:1 1 44%; min-width:120px;}
+  input[type=number], input[type=text]{width:100%;}
+  select{width:100%; min-width:0;}
+  .ctrl-group{width:100%;}
+  .ctrl-group button{flex:1;}
+  .athlete-panel{width:min(280px, 88vw);}
+  .clear-btn{width:100%; text-align:center;}
+
+  .summary-row{flex-direction:column;}
+  .stat-seg{border-right:none; border-bottom:1px solid var(--line);}
+  .stat-seg:last-child{border-bottom:none;}
+
+  .legend{font-size:10px; gap:10px 14px; padding:8px 10px;}
+
+  .athlete-row{flex-wrap:wrap; padding:12px 4px;}
+  .athlete-name{width:100%; margin-bottom:6px;}
+  .games-scroll{width:100%; order:2;}
+  .summary-col{width:100%; align-items:flex-start; text-align:left; margin-top:8px; order:3;}
+  .summary-col .bar-bg{width:100%;}
+}
 </style>
 </head>
 <body>
@@ -407,8 +437,15 @@ function wireTooltips(){
   document.querySelectorAll('.circle[data-tip]').forEach(el => {
     el.addEventListener('mouseenter', () => showTip(el, decodeURIComponent(el.dataset.tip)));
     el.addEventListener('mouseleave', hideTip);
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isShown = floatTip.classList.contains('show') && floatTip.dataset.owner === el.dataset.tip;
+      if(isShown){ hideTip(); }
+      else{ showTip(el, decodeURIComponent(el.dataset.tip)); floatTip.dataset.owner = el.dataset.tip; }
+    });
   });
 }
+document.addEventListener('click', hideTip);
 
 function render(){
   initControlsOnce();
