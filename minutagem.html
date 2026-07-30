@@ -228,10 +228,51 @@ function buildAthletePanel(){
     <div class="athlete-panel-header"><button id="selAll" type="button">Todos</button><button id="selNone" type="button">Limpar</button></div>
     <div class="athlete-panel-list">${allNames.map(n=>`<label class="athlete-check"><input type="checkbox" value="${n}" ${state.selectedAthletes.has(n)?'checked':''}> ${n}</label>`).join('')}</div>`;
   panel.querySelectorAll('input[type=checkbox]').forEach(cb=>{
-    cb.onchange = ()=>{ if(cb.checked) state.selectedAthletes.add(cb.value); else state.selectedAthletes.delete(cb.value); render(); };
+    cb.onchange = ()=>{ if(cb.checked) state.selectedAthletes.add(cb.value); else state.selectedAthletes.delete(cb.value); saveSharedSelection(); render(); };
   });
-  panel.querySelector('#selAll').onclick = ()=>{ state.selectedAthletes = new Set(allNames); render(); };
-  panel.querySelector('#selNone').onclick = ()=>{ state.selectedAthletes = new Set(); render(); };
+  panel.querySelector('#selAll').onclick = ()=>{ state.selectedAthletes = new Set(allNames); saveSharedSelection(); render(); };
+  panel.querySelector('#selNone').onclick = ()=>{ state.selectedAthletes = new Set(); saveSharedSelection(); render(); };
+}
+
+// ---------- seleção de atletas compartilhada (Supabase) ----------
+const SUPABASE_URL = 'https://kttnzhvqgffjqzpjwkyt.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_2U0ttFYrtwTp3mZ1xBr41A_TSTZ_9Yw';
+const SHARED_ROW_ID = 'minutagem_selecao';
+
+async function fetchSharedSelection(){
+  try{
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/minutagem_config?id=eq.${SHARED_ROW_ID}&select=selected_atletas`, {
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` }
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const rows = await res.json();
+    if(rows.length && Array.isArray(rows[0].selected_atletas)) return rows[0].selected_atletas;
+    return null;
+  } catch(err){
+    console.warn('Não consegui carregar a seleção compartilhada, usando padrão (todos selecionados):', err.message);
+    return null;
+  }
+}
+
+let saveTimer = null;
+function saveSharedSelection(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try{
+      const body = { id: SHARED_ROW_ID, selected_atletas: Array.from(state.selectedAthletes), updated_at: new Date().toISOString() };
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/minutagem_config`, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify(body)
+      });
+      if(!res.ok) throw new Error('HTTP '+res.status);
+    } catch(err){
+      console.warn('Não consegui salvar a seleção compartilhada:', err.message);
+    }
+  }, 400);
 }
 
 function initControlsOnce(){
@@ -260,6 +301,7 @@ function initControlsOnce(){
     setYearRange(yrs[yrs.length-1]);
     state.lastN = null; state.minMinutes = null; state.grupo = 'todos'; state.search = '';
     state.selectedAthletes = new Set(Object.keys(DATA.jogadores));
+    saveSharedSelection();
     document.getElementById('lastN').value=''; document.getElementById('minMinutes').value='';
     document.getElementById('groupFilter').value='todos'; document.getElementById('searchInput').value='';
     refreshDataDependentControls(); render();
@@ -536,7 +578,16 @@ async function exportPDF(){
   finally { btn.disabled = false; btn.textContent = 'Exportar PDF'; }
 }
 
-render();
+async function bootstrap(){
+  const shared = await fetchSharedSelection();
+  if(shared){
+    const allNames = new Set(Object.keys(DATA.jogadores));
+    const valid = shared.filter(n => allNames.has(n));
+    state.selectedAthletes = new Set(valid.length ? valid : allNames);
+  }
+  render();
+}
+bootstrap();
 </script>
 </body>
 </html>
