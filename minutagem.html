@@ -39,6 +39,7 @@ input[type=text]{width:130px;}
 select{min-width:118px;}
 input:focus, select:focus{border-color:var(--red);}
 .file-btn, .panel-btn{background:var(--surface2); border:1px solid var(--line); border-radius:7px; padding:0 12px; height:32px; font-size:12px; font-weight:600; color:var(--gray); cursor:pointer; display:flex; align-items:center; gap:6px; white-space:nowrap;}
+.file-btn{width:210px; overflow:hidden; text-overflow:ellipsis;}
 .file-btn:hover, .panel-btn:hover{color:var(--text); border-color:var(--red);}
 #csvUpload{display:none;}
 .pdf-btn{background:var(--red); border:none; border-radius:8px; padding:9px 18px; font-size:12.5px; font-weight:700; color:#fff; cursor:pointer; letter-spacing:0.3px; white-space:nowrap;}
@@ -131,6 +132,7 @@ footer{margin-top:26px; color:var(--gray-dim); font-size:11px; line-height:1.6;}
   .ctrl-group button{flex:1;}
   .athlete-panel{width:min(280px, 88vw);}
   .clear-btn{width:100%; text-align:center;}
+  .file-btn{width:100%;}
 
   .summary-row{flex-direction:column;}
   .stat-seg{border-right:none; border-bottom:1px solid var(--line);}
