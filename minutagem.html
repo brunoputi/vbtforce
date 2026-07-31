@@ -314,6 +314,43 @@ function saveSharedSelection(){
   }, 400);
 }
 
+// ---------- dataset completo compartilhado (Supabase) ----------
+const DATASET_ROW_ID = 'minutagem_dados';
+
+async function fetchSharedDataset(){
+  try{
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/minutagem_dataset?id=eq.${DATASET_ROW_ID}&select=jogadores`, {
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` }
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const rows = await res.json();
+    if(rows.length && rows[0].jogadores && Object.keys(rows[0].jogadores).length) return rows[0].jogadores;
+    return null;
+  } catch(err){
+    console.warn('Não consegui carregar o dataset salvo, usando os dados de demonstração embutidos:', err.message);
+    return null;
+  }
+}
+
+async function saveSharedDataset(jogadores){
+  try{
+    const body = { id: DATASET_ROW_ID, jogadores: jogadores, updated_at: new Date().toISOString() };
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/minutagem_dataset`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify(body)
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    return true;
+  } catch(err){
+    console.warn('Não consegui salvar o dataset compartilhado (os dados continuam funcionando só nesta aba):', err.message);
+    return false;
+  }
+}
+
 function initControlsOnce(){
   if(controlsBuilt) return;
   controlsBuilt = true;
@@ -574,8 +611,10 @@ function buildDatasetFromRows(rows){
 function handleUpload(e){
   const file = e.target.files[0];
   if(!file) return;
+  const label = document.querySelector('label[for="csvUpload"]');
+  const originalLabel = label ? label.textContent : null;
   const reader = new FileReader();
-  reader.onload = function(evt){
+  reader.onload = async function(evt){
     try{
       const text = new TextDecoder('windows-1252').decode(evt.target.result);
       const newData = buildDatasetFromRows(parseCSVText(text));
@@ -588,6 +627,11 @@ function handleUpload(e){
       state.selectedAthletes = new Set(Object.keys(DATA.jogadores));
       controlsBuilt = false;
       render();
+      if(label) label.textContent = '💾 Salvando pra todo mundo...';
+      const ok = await saveSharedDataset(DATA.jogadores);
+      if(label) label.textContent = ok ? '✅ Salvo — vale pra todo mundo' : originalLabel;
+      if(!ok) alert('Os dados carregaram na tela, mas não consegui salvar no servidor — só vão persistir nesta aba até você atualizar a página. Confere sua conexão e tenta subir de novo se precisar que fique salvo pra todos.');
+      else setTimeout(() => { if(label) label.textContent = originalLabel; }, 3000);
     } catch(err){ alert('Erro ao ler o arquivo: ' + err.message); }
   };
   reader.readAsArrayBuffer(file);
@@ -634,6 +678,9 @@ async function exportPDF(){
 }
 
 async function bootstrap(){
+  const sharedDataset = await fetchSharedDataset();
+  if(sharedDataset) DATA = { jogadores: sharedDataset };
+
   const shared = await fetchSharedSelection();
   if(shared){
     const allNames = new Set(Object.keys(DATA.jogadores));
