@@ -469,6 +469,7 @@ function render(){
     rowsByAthlete[n] = rows;
     minutesByAthlete[n] = rows.reduce((s,r)=>s+r.m,0);
   });
+  names = names.filter(n => rowsByAthlete[n].length > 0);
   if(state.minMinutes !== null) names = names.filter(n => minutesByAthlete[n] >= state.minMinutes);
   if(state.grupo !== 'todos') names = names.filter(n => (mostRecentGroup(rowsByAthlete[n]) || mostRecentGroup(DATA.jogadores[n])) === state.grupo);
   names.sort();
