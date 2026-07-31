@@ -455,8 +455,17 @@ function wireTooltips(){
 }
 document.addEventListener('click', hideTip);
 
+function updateActiveYearButton(){
+  const yg = document.getElementById('yearGroup');
+  if(!yg) return;
+  yg.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('active', Number(b.dataset.year) === state.year);
+  });
+}
+
 function render(){
   initControlsOnce();
+  updateActiveYearButton();
 
   const uniqueGames = buildUniqueGames();
   const teamTotal = uniqueGames.filter(g => g.dateObj >= state.dateFrom && g.dateObj <= state.dateTo).reduce((s,g)=>s+g.dur,0);
