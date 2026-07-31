@@ -251,8 +251,14 @@ function mostRecentGroup(rows){
   return '';
 }
 
+function athletesInPeriod(){
+  return Object.keys(DATA.jogadores).filter(n =>
+    DATA.jogadores[n].some(r => { const dt = rowDate(r); return dt >= state.dateFrom && dt <= state.dateTo; })
+  ).sort();
+}
+
 function buildAthletePanel(){
-  const allNames = Object.keys(DATA.jogadores).sort();
+  const allNames = athletesInPeriod();
   const panel = document.getElementById('athletePanel');
   panel.innerHTML = `
     <div class="athlete-panel-header"><button id="selAll" type="button">Todos</button><button id="selNone" type="button">Limpar</button></div>
@@ -260,8 +266,11 @@ function buildAthletePanel(){
   panel.querySelectorAll('input[type=checkbox]').forEach(cb=>{
     cb.onchange = ()=>{ if(cb.checked) state.selectedAthletes.add(cb.value); else state.selectedAthletes.delete(cb.value); saveSharedSelection(); render(); };
   });
-  panel.querySelector('#selAll').onclick = ()=>{ state.selectedAthletes = new Set(allNames); saveSharedSelection(); render(); };
-  panel.querySelector('#selNone').onclick = ()=>{ state.selectedAthletes = new Set(); saveSharedSelection(); render(); };
+  panel.querySelector('#selAll').onclick = ()=>{ allNames.forEach(n => state.selectedAthletes.add(n)); saveSharedSelection(); buildAthletePanel(); render(); };
+  panel.querySelector('#selNone').onclick = ()=>{ allNames.forEach(n => state.selectedAthletes.delete(n)); saveSharedSelection(); buildAthletePanel(); render(); };
+  const selectedCount = allNames.filter(n => state.selectedAthletes.has(n)).length;
+  const countEl = document.getElementById('athleteCount');
+  if(countEl) countEl.textContent = selectedCount + '/' + allNames.length;
 }
 
 // ---------- seleção de atletas compartilhada (Supabase) ----------
@@ -312,8 +321,8 @@ function initControlsOnce(){
   if(state.year === null) setYearRange(years[years.length-1]);
   if(state.selectedAthletes === null) state.selectedAthletes = new Set(Object.keys(DATA.jogadores));
 
-  document.getElementById('dateFrom').onchange = (e) => { state.dateFrom = new Date(e.target.value+'T00:00:00'); state.year=null; render(); };
-  document.getElementById('dateTo').onchange = (e) => { state.dateTo = new Date(e.target.value+'T00:00:00'); state.year=null; render(); };
+  document.getElementById('dateFrom').onchange = (e) => { state.dateFrom = new Date(e.target.value+'T00:00:00'); state.year=null; buildAthletePanel(); render(); };
+  document.getElementById('dateTo').onchange = (e) => { state.dateTo = new Date(e.target.value+'T00:00:00'); state.year=null; buildAthletePanel(); render(); };
   document.getElementById('lastN').oninput = (e) => { state.lastN = e.target.value ? parseInt(e.target.value,10) : null; render(); };
   document.getElementById('minMinutes').oninput = (e) => { state.minMinutes = e.target.value ? parseFloat(e.target.value) : null; render(); };
   document.getElementById('groupFilter').onchange = (e) => { state.grupo = e.target.value; render(); };
@@ -345,14 +354,13 @@ function refreshDataDependentControls(){
   const years = availableYears();
   const yg = document.getElementById('yearGroup');
   yg.innerHTML = years.map(y => `<button data-year="${y}" class="${y===state.year?'active':''}">${y}</button>`).join('');
-  yg.querySelectorAll('button').forEach(b => b.onclick = () => { setYearRange(Number(b.dataset.year)); render(); });
+  yg.querySelectorAll('button').forEach(b => b.onclick = () => { setYearRange(Number(b.dataset.year)); buildAthletePanel(); render(); });
   document.getElementById('dateFrom').value = toInputDate(state.dateFrom);
   document.getElementById('dateTo').value = toInputDate(state.dateTo);
   const gf = document.getElementById('groupFilter');
   gf.innerHTML = ['todos',...GROUP_ORDER].map(g => `<option value="${g}">${g==='todos'?'Todos os grupos':g}</option>`).join('');
   gf.value = state.grupo;
   buildAthletePanel();
-  document.getElementById('athleteCount').textContent = state.selectedAthletes.size + '/' + Object.keys(DATA.jogadores).length;
 }
 
 function filterRowsForAthlete(rows){
