@@ -23,6 +23,7 @@ header{display:flex; justify-content:space-between; align-items:flex-end; border
 .title-block p{color:var(--gray); font-size:12.5px; margin-top:4px;}
 
 .controls-bar{display:flex; flex-wrap:wrap; gap:0; align-items:stretch; margin-bottom:14px; background:var(--surface); border:1px solid var(--line); border-radius:10px; overflow:visible;}
+.controls-bar-extra{background:var(--bg); border-style:dashed;}
 .ctrl-cluster{display:flex; gap:14px; align-items:flex-start; padding:12px 16px; border-right:1px solid var(--line); flex-wrap:nowrap; flex-shrink:0;}
 .ctrl-cluster:last-child{border-right:none;}
 .controls-bar{align-items:stretch;}
@@ -32,15 +33,14 @@ header{display:flex; justify-content:space-between; align-items:flex-end; border
 .ctrl-group button{background:transparent; border:none; color:var(--gray); font-family:'Inter',sans-serif; font-size:12px; font-weight:600; padding:0 12px; cursor:pointer; border-right:1px solid var(--line); white-space:nowrap;}
 .ctrl-group button:last-child{border-right:none;}
 .ctrl-group button.active{background:var(--red); color:#fff;}
-#yearGroup{flex-direction:column; height:auto; width:66px;}
-#yearGroup button{border-right:none; border-bottom:1px solid var(--line); padding:6px 0; text-align:center;}
-#yearGroup button:last-child{border-bottom:none;}
 #sortGroup button{padding:0 10px; font-size:15px;}
 
 input[type=number], input[type=date], input[type=text], select{background:var(--surface2); border:1px solid var(--line); border-radius:7px; padding:0 10px; height:32px; color:var(--text); font-size:12.5px; font-family:'Inter',sans-serif; outline:none;}
 input[type=number]{width:80px;}
 input[type=text]{width:130px;}
+input.date-compact{width:128px; padding:0 6px; font-size:11.5px;}
 select{min-width:118px;}
+#yearSelect{min-width:78px;}
 input:focus, select:focus{border-color:var(--red);}
 .file-btn, .panel-btn{background:var(--surface2); border:1px solid var(--line); border-radius:7px; padding:0 12px; height:32px; font-size:12px; font-weight:600; color:var(--gray); cursor:pointer; display:flex; align-items:center; gap:6px; white-space:nowrap;}
 
@@ -51,7 +51,7 @@ input:focus, select:focus{border-color:var(--red);}
 .pdf-btn{background:var(--red); border:none; border-radius:8px; padding:9px 18px; font-size:12.5px; font-weight:700; color:#fff; cursor:pointer; letter-spacing:0.3px; white-space:nowrap;}
 .pdf-btn:hover{background:#B5111A;}
 .pdf-btn:disabled{opacity:0.5; cursor:wait;}
-.clear-btn{background:transparent; border:1px solid var(--line); border-radius:7px; padding:0 12px; height:32px; font-size:11.5px; color:var(--gray); cursor:pointer; align-self:center; white-space:nowrap;}
+.clear-btn{background:transparent; border:1px solid var(--line); border-radius:7px; padding:0 12px; height:32px; font-size:11.5px; color:var(--gray); cursor:pointer; white-space:nowrap;}
 .clear-btn:hover{color:var(--text); border-color:var(--gray);}
 
 .athlete-panel{display:none; position:absolute; top:100%; left:0; margin-top:6px; z-index:200; background:#fff; border:1px solid var(--line); border-radius:10px; width:280px; max-height:340px; overflow-y:auto; box-shadow:0 10px 30px rgba(0,0,0,0.18);}
@@ -91,6 +91,9 @@ input:focus, select:focus{border-color:var(--red);}
 .pos-tag:hover{color:var(--red); text-decoration:underline;}
 .pos-tag.empty{color:var(--gray-dim); font-style:italic;}
 .pos-input{font-size:10.5px; padding:2px 5px; border:1px solid var(--red); border-radius:4px; width:110px; margin-top:1px;}
+.adv-tag{cursor:pointer;}
+.adv-tag:hover{color:var(--red); text-decoration:underline;}
+.adv-input{font-size:8px; padding:1px 3px; border:1px solid var(--red); border-radius:3px; width:44px; text-align:center;}
 .games-scroll{display:flex; gap:8px; overflow-x:auto; overflow-y:visible; flex:1; padding:4px 4px 2px;}
 .games-scroll::-webkit-scrollbar{height:5px;}
 .games-scroll::-webkit-scrollbar-thumb{background:var(--line); border-radius:4px;}
@@ -101,6 +104,9 @@ input:focus, select:focus{border-color:var(--red);}
 .loc-dot{width:5px; height:5px; border-radius:50%; flex-shrink:0; display:inline-block;}
 .loc-dot.casa{background:var(--gray); border:1px solid var(--gray);}
 .loc-dot.fora{background:transparent; border:1px solid var(--gray);}
+.comp-bar{width:22px; height:3px; border-radius:2px; margin-top:2px;}
+.comp-legend{display:flex; gap:12px; flex-wrap:wrap; align-items:center; font-size:10.5px; color:var(--gray); margin-bottom:12px;}
+.comp-legend .swatch{width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:5px; vertical-align:-1px;}
 .circle{width:34px; height:34px; flex-shrink:0; position:relative; cursor:default;}
 
 .summary-col{width:150px; flex-shrink:0; text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:3px;}
@@ -116,6 +122,7 @@ footer{margin-top:26px; color:var(--gray-dim); font-size:11px; line-height:1.6;}
 #printCapture .print-title{font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:22px; color:var(--text); text-transform:uppercase;}
 #printCapture .print-sub{font-family:'Inter',sans-serif; font-size:11px; color:var(--gray); margin:4px 0 16px; padding-bottom:12px; border-bottom:2px solid var(--red);}
 #printCapture .legend{margin-bottom:16px;}
+#printCapture .comp-legend{margin-bottom:16px;}
 #printCapture .summary-row{margin-bottom:14px;}
 #printCapture .stat-seg{padding:9px 16px; min-width:auto;}
 #printCapture .stat-seg .num{font-size:19px;}
@@ -171,17 +178,10 @@ footer{margin-top:26px; color:var(--gray-dim); font-size:11px; line-height:1.6;}
 
   <div class="controls-bar" id="controlsBar">
     <div class="ctrl-cluster">
-      <div class="ctrl"><label>Ano</label><div class="ctrl-group" id="yearGroup"></div></div>
-      <div class="ctrl"><label>De</label><input type="date" id="dateFrom"></div>
-      <div class="ctrl"><label>Até</label><input type="date" id="dateTo"></div>
+      <div class="ctrl"><label>Ano</label><select id="yearSelect"></select></div>
+      <div class="ctrl"><label>De</label><input type="date" id="dateFrom" class="date-compact"></div>
+      <div class="ctrl"><label>Até</label><input type="date" id="dateTo" class="date-compact"></div>
       <div class="ctrl"><label>Dados</label><label class="file-btn" for="csvUpload">📄 Subir planilha (.csv)</label><input type="file" id="csvUpload" accept=".csv"></div>
-    </div>
-    <div class="ctrl-cluster">
-      <div class="ctrl"><label>Últimos N jogos</label><input type="number" id="lastN" min="1" placeholder="todos"></div>
-      <div class="ctrl"><label>Mín. minutos período</label><input type="number" id="minMinutes" min="0" placeholder="0"></div>
-      <div class="ctrl"><label>Competição</label><select id="compFilter"></select></div>
-      <div class="ctrl"><label>Posição</label><select id="posFilter"></select></div>
-      <div class="ctrl"><label>Ordenar</label><div class="ctrl-group" id="sortGroup"></div></div>
     </div>
     <div class="ctrl-cluster">
       <div class="ctrl"><label>Grupo</label><select id="groupFilter"></select></div>
@@ -193,7 +193,18 @@ footer{margin-top:26px; color:var(--gray-dim); font-size:11px; line-height:1.6;}
       <div class="ctrl"><label>Buscar</label><input type="text" id="searchInput" placeholder="Nome do atleta"></div>
     </div>
     <div class="ctrl-cluster">
-      <button class="clear-btn" id="clearBtn">Limpar filtros</button>
+      <div class="ctrl"><label>&nbsp;</label><button class="panel-btn" id="moreFiltersBtn" type="button">Mais filtros ▾</button></div>
+      <div class="ctrl"><label>&nbsp;</label><button class="clear-btn" id="clearBtn">Limpar filtros</button></div>
+    </div>
+  </div>
+
+  <div class="controls-bar controls-bar-extra" id="extraFiltersBar" style="display:none;">
+    <div class="ctrl-cluster">
+      <div class="ctrl"><label>Últimos N jogos</label><input type="number" id="lastN" min="1" placeholder="todos"></div>
+      <div class="ctrl"><label>Mín. minutos período</label><input type="number" id="minMinutes" min="0" placeholder="0"></div>
+      <div class="ctrl"><label>Competição</label><select id="compFilter"></select></div>
+      <div class="ctrl"><label>Posição</label><select id="posFilter"></select></div>
+      <div class="ctrl"><label>Ordenar</label><div class="ctrl-group" id="sortGroup"></div></div>
     </div>
   </div>
 
@@ -206,6 +217,7 @@ footer{margin-top:26px; color:var(--gray-dim); font-size:11px; line-height:1.6;}
     <div class="legend-item"><span class="dot nao-jogou"></span>não jogou</div>
     <div class="legend-item"><span class="loc-dot casa" style="border:1px solid var(--gray-dim);"></span>casa &nbsp; <span class="loc-dot fora" style="border:1px solid var(--gray-dim);"></span>fora</div>
   </div>
+  <div class="comp-legend" id="compLegend"></div>
 
   <div class="summary-row" id="summaryRow"></div>
   <div id="matrix"></div>
@@ -245,6 +257,7 @@ function toInputDate(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad
 function toBrDate(d){ return pad2(d.getDate())+'/'+pad2(d.getMonth()+1)+'/'+d.getFullYear(); }
 function shortAdv(adv){
   if(!adv) return '';
+  if(siglas[adv]) return siglas[adv];
   const clean = adv.trim();
   return clean.length <= 5 ? clean.toUpperCase() : (clean.slice(0,4)+'.').toUpperCase();
 }
@@ -281,6 +294,23 @@ function athletesInPeriod(){
   return Object.keys(DATA.jogadores).filter(n =>
     DATA.jogadores[n].some(r => { const dt = rowDate(r); return dt >= state.dateFrom && dt <= state.dateTo; })
   ).sort();
+}
+
+const COMP_PALETTE = ['#1864AB','#9C6B30','#C2255C','#495057','#7048E8','#862E9C'];
+let compColorMap = {};
+function rebuildCompColorMap(){
+  const comps = competitionsInPeriod();
+  compColorMap = {};
+  comps.forEach((c,i) => { compColorMap[c] = COMP_PALETTE[i % COMP_PALETTE.length]; });
+}
+
+function renderCompLegend(){
+  const el = document.getElementById('compLegend');
+  if(!el) return;
+  const comps = Object.keys(compColorMap);
+  if(comps.length <= 1){ el.innerHTML = ''; return; }
+  el.innerHTML = `<span><b>Barra sob a bolinha</b> = competição:</span>` +
+    comps.map(c => `<span><span class="swatch" style="background:${compColorMap[c]}"></span>${c}</span>`).join('');
 }
 
 function competitionsInPeriod(){
@@ -425,6 +455,44 @@ async function savePosicao(nome, posicao){
   }
 }
 
+// ---------- sigla por adversário (compartilhada, editável na própria tela) ----------
+let siglas = {};
+
+async function fetchSiglas(){
+  try{
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/minutagem_siglas?select=adversario,sigla`, {
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` }
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const rows = await res.json();
+    const map = {};
+    rows.forEach(r => { if(r.sigla) map[r.adversario] = r.sigla; });
+    return map;
+  } catch(err){
+    console.warn('Não consegui carregar as siglas salvas:', err.message);
+    return {};
+  }
+}
+
+async function saveSigla(adversario, sigla){
+  try{
+    const body = { adversario, sigla, updated_at: new Date().toISOString() };
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/minutagem_siglas`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify(body)
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    return true;
+  } catch(err){
+    console.warn('Não consegui salvar a sigla:', err.message);
+    return false;
+  }
+}
+
 function initControlsOnce(){
   if(controlsBuilt) return;
   controlsBuilt = true;
@@ -460,15 +528,22 @@ function initControlsOnce(){
     refreshDataDependentControls(); render();
   };
   document.getElementById('pdfBtn').onclick = exportPDF;
+  document.getElementById('moreFiltersBtn').onclick = () => {
+    const bar = document.getElementById('extraFiltersBar');
+    const btn = document.getElementById('moreFiltersBtn');
+    const open = bar.style.display !== 'none';
+    bar.style.display = open ? 'none' : 'flex';
+    btn.textContent = open ? 'Mais filtros ▾' : 'Menos filtros ▴';
+  };
   document.getElementById('csvUpload').onchange = handleUpload;
   refreshDataDependentControls();
 }
 
 function refreshDataDependentControls(){
   const years = availableYears();
-  const yg = document.getElementById('yearGroup');
-  yg.innerHTML = years.map(y => `<button data-year="${y}" class="${y===state.year?'active':''}">${y}</button>`).join('');
-  yg.querySelectorAll('button').forEach(b => b.onclick = () => { setYearRange(Number(b.dataset.year)); buildAthletePanel(); buildCompFilter(); render(); });
+  const ySel = document.getElementById('yearSelect');
+  ySel.innerHTML = (state.year===null ? `<option value="" selected disabled>Personalizado</option>` : '') + years.map(y => `<option value="${y}" ${y===state.year?'selected':''}>${y}</option>`).join('');
+  ySel.onchange = () => { setYearRange(Number(ySel.value)); buildAthletePanel(); buildCompFilter(); render(); };
   document.getElementById('dateFrom').value = toInputDate(state.dateFrom);
   document.getElementById('dateTo').value = toInputDate(state.dateTo);
   const gf = document.getElementById('groupFilter');
@@ -563,6 +638,9 @@ function renderCircle(r){
   const played = r.m > 0;
   const dateFmt = r.d.split('-').reverse().join('/');
   const advCode = shortAdv(r.adv);
+  const advTag = r.adv ? `<span class="adv-tag" data-adversario="${r.adv}">${advCode}</span>` : advCode;
+  const compColor = compColorMap[r.camp] || 'transparent';
+  const compBar = Object.keys(compColorMap).length > 1 ? `<div class="comp-bar" style="background:${compColor}"></div>` : '';
   if(!played){
     const locTxt = r.loc==='F' ? ' (fora)' : r.loc==='C' ? ' (casa)' : '';
     const tip = `<div class="tt-title">Não jogou</div><div class="tt-row"><b>${r.adv||'—'}</b>${locTxt} · ${dateFmt}</div><div class="tt-row">${r.camp||'—'}</div>`;
@@ -570,7 +648,7 @@ function renderCircle(r){
     const dotHtml = dotCls ? `<span class="loc-dot ${dotCls}"></span>` : '';
     return `<div class="game-cell">
       <div class="circle" data-tip="${encodeURIComponent(tip)}">${dashedCircleSVG()}</div>
-      <div class="game-date">${dateFmt}</div><div class="game-adv">${dotHtml}${advCode}</div>
+      <div class="game-date">${dateFmt}</div><div class="game-adv">${dotHtml}${advTag}</div>${compBar}
     </div>`;
   }
   const pct = Math.min(100, r.p);
@@ -588,7 +666,7 @@ function renderCircle(r){
   const dotHtml = dotCls ? `<span class="loc-dot ${dotCls}"></span>` : '';
   return `<div class="game-cell">
     <div class="circle" data-tip="${encodeURIComponent(tip)}">${ringSVG(pct, ringHex, ringWidth, r.m)}</div>
-    <div class="game-date">${dateFmt}</div><div class="game-adv">${dotHtml}${advCode}</div>
+    <div class="game-date">${dateFmt}</div><div class="game-adv">${dotHtml}${advTag}</div>${compBar}
   </div>`;
 }
 
@@ -638,18 +716,50 @@ function wirePositionEditors(){
   });
 }
 
-function updateActiveYearButton(){
-  const yg = document.getElementById('yearGroup');
-  if(!yg) return;
-  yg.querySelectorAll('button').forEach(b => {
-    b.classList.toggle('active', Number(b.dataset.year) === state.year);
+function wireAdvEditors(){
+  document.querySelectorAll('.adv-tag').forEach(tag => {
+    tag.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const adversario = tag.dataset.adversario;
+      const current = tag.textContent;
+      const input = document.createElement('input');
+      input.className = 'adv-input';
+      input.value = siglas[adversario] || '';
+      input.placeholder = current;
+      input.maxLength = 6;
+      tag.replaceWith(input);
+      input.focus();
+      input.select();
+      const commit = async () => {
+        const val = input.value.trim().toUpperCase();
+        const before = siglas[adversario] || '';
+        if(val !== before){
+          if(val) siglas[adversario] = val; else delete siglas[adversario];
+          await saveSigla(adversario, val);
+        }
+        render();
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (ev) => {
+        if(ev.key === 'Enter') input.blur();
+        if(ev.key === 'Escape'){ input.value = siglas[adversario] || ''; input.blur(); }
+      });
+    });
   });
+}
+
+function updateActiveYearButton(){
+  const ySel = document.getElementById('yearSelect');
+  if(!ySel) return;
+  if(state.year !== null && ySel.value !== String(state.year)) ySel.value = String(state.year);
 }
 
 function render(){
   initControlsOnce();
   updateActiveYearButton();
   updateActiveSortButton();
+  rebuildCompColorMap();
+  renderCompLegend();
 
   const uniqueGames = buildUniqueGames();
   const teamTotal = uniqueGames.filter(g => g.dateObj >= state.dateFrom && g.dateObj <= state.dateTo).reduce((s,g)=>s+g.dur,0);
@@ -710,6 +820,7 @@ function render(){
 
   wireTooltips();
   wirePositionEditors();
+  wireAdvEditors();
 }
 
 function parseCSVText(text){
@@ -827,6 +938,7 @@ async function exportPDF(){
       <div class="print-sub">${filterSummaryText(visibleCount)}</div>
       ${document.getElementById('summaryRow').outerHTML}
       ${document.querySelector('.legend').outerHTML}
+      ${document.getElementById('compLegend').outerHTML}
       ${document.getElementById('matrix').outerHTML}
     `;
     document.body.appendChild(printDiv);
@@ -848,6 +960,7 @@ async function bootstrap(){
   if(sharedDataset) DATA = { jogadores: sharedDataset };
 
   posicoes = await fetchPosicoes();
+  siglas = await fetchSiglas();
 
   const shared = await fetchSharedSelection();
   if(shared){
