@@ -271,7 +271,7 @@ function buildUniqueGames(){
   const map = {};
   Object.values(DATA.jogadores).forEach(rows=> rows.forEach(r=>{
     const key = r.a+'_'+r.j;
-    if(!map[key]) map[key] = {a:r.a, j:r.j, dur:r.dur, dateObj: rowDate(r)};
+    if(!map[key]) map[key] = {a:r.a, j:r.j, dur:r.dur, dateObj: rowDate(r), camp:r.camp};
   }));
   return Object.values(map);
 }
@@ -762,7 +762,8 @@ function render(){
   renderCompLegend();
 
   const uniqueGames = buildUniqueGames();
-  const teamTotal = uniqueGames.filter(g => g.dateObj >= state.dateFrom && g.dateObj <= state.dateTo).reduce((s,g)=>s+g.dur,0);
+  const gamesInPeriod = uniqueGames.filter(g => g.dateObj >= state.dateFrom && g.dateObj <= state.dateTo && (state.competicao==='todas' || g.camp === state.competicao));
+  const teamTotal = gamesInPeriod.reduce((s,g)=>s+g.dur,0);
 
   let names = Object.keys(DATA.jogadores).filter(n => n.toLowerCase().includes(state.search) && state.selectedAthletes.has(n));
 
@@ -788,7 +789,7 @@ function render(){
   names.forEach(n => rowsByAthlete[n].forEach(r=>{ if(r.m>0){ totalParticip++; if(r.c==='congestionado') congestCount++; if(r.c==='muito_congestionado') muitoCount++; } }));
 
   const riscoTotal = congestCount + muitoCount;
-  const gamesInRange = uniqueGames.filter(g => g.dateObj >= state.dateFrom && g.dateObj <= state.dateTo).length;
+  const gamesInRange = gamesInPeriod.length;
   document.getElementById('summaryRow').innerHTML = `
     <div class="stat-seg"><div class="num">${gamesInRange}</div><div class="lbl">Jogos analisados no período</div></div>
     <div class="stat-seg"><div class="num">${teamTotal.toLocaleString('pt-BR')} min</div><div class="lbl">Total de minutos da equipe no período</div></div>
