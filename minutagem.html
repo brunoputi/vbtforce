@@ -587,11 +587,13 @@ function updateActiveSortButton(){
   });
 }
 
+let lastNGameKeys = null;
+
 function filterRowsForAthlete(rows){
   let filtered = rows.filter(r => { const dt = rowDate(r); return dt >= state.dateFrom && dt <= state.dateTo; });
   if(state.competicao !== 'todas') filtered = filtered.filter(r => r.camp === state.competicao);
+  if(lastNGameKeys) filtered = filtered.filter(r => lastNGameKeys.has(r.a+'_'+r.j));
   filtered.sort((a,b) => rowDate(a) - rowDate(b));
-  if(state.lastN) filtered = filtered.slice(-state.lastN);
   return filtered;
 }
 function congestionClass(c){
@@ -763,7 +765,15 @@ function render(){
 
   const uniqueGames = buildUniqueGames();
   const gamesInPeriod = uniqueGames.filter(g => g.dateObj >= state.dateFrom && g.dateObj <= state.dateTo && (state.competicao==='todas' || g.camp === state.competicao));
-  const teamTotal = gamesInPeriod.reduce((s,g)=>s+g.dur,0);
+
+  lastNGameKeys = null;
+  let finalGames = gamesInPeriod;
+  if(state.lastN){
+    const sorted = [...gamesInPeriod].sort((a,b) => b.dateObj - a.dateObj).slice(0, state.lastN);
+    lastNGameKeys = new Set(sorted.map(g => g.a+'_'+g.j));
+    finalGames = sorted;
+  }
+  const teamTotal = finalGames.reduce((s,g)=>s+g.dur,0);
 
   let names = Object.keys(DATA.jogadores).filter(n => n.toLowerCase().includes(state.search) && state.selectedAthletes.has(n));
 
@@ -789,7 +799,7 @@ function render(){
   names.forEach(n => rowsByAthlete[n].forEach(r=>{ if(r.m>0){ totalParticip++; if(r.c==='congestionado') congestCount++; if(r.c==='muito_congestionado') muitoCount++; } }));
 
   const riscoTotal = congestCount + muitoCount;
-  const gamesInRange = gamesInPeriod.length;
+  const gamesInRange = finalGames.length;
   document.getElementById('summaryRow').innerHTML = `
     <div class="stat-seg"><div class="num">${gamesInRange}</div><div class="lbl">Jogos analisados no período</div></div>
     <div class="stat-seg"><div class="num">${teamTotal.toLocaleString('pt-BR')} min</div><div class="lbl">Total de minutos da equipe no período</div></div>
