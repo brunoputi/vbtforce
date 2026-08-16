@@ -851,17 +851,25 @@ function buildDatasetFromRows(rows){
     const grupo = cols[8] && cols[8].trim();
     const min = parseFloat(cols[5]) || 0;
     const dataStr = cols[12] && cols[12].trim();
+    const dataAdvStr = cols[2] && cols[2].trim();
     const horarioStr = cols[10] && cols[10].trim();
     const adversario = cols[13] && cols[13].trim();
     const campeonato = cols[3] && cols[3].trim();
     const jogoNum = cols[4] && cols[4].trim();
     const locRaw = cols[23] && cols[23].trim();
     const loc = (locRaw==='Fora'||locRaw==='Visitante') ? 'F' : (locRaw==='Casa' ? 'C' : '');
-    if(!dataStr || !jogoNum) return null;
-    const parts = dataStr.split('/');
-    if(parts.length < 3) return null;
-    const mm = parseInt(parts[0],10), dd = parseInt(parts[1],10), yyyy = parseInt(parts[2],10);
-    if(!yyyy) return null;
+    if(!jogoNum) return null;
+    let mm, dd, yyyy;
+    if(dataStr && dataStr !== '#VALOR!'){
+      const parts = dataStr.split('/');
+      if(parts.length >= 3){ mm = parseInt(parts[0],10); dd = parseInt(parts[1],10); yyyy = parseInt(parts[2],10); }
+    }
+    if(!yyyy || isNaN(yyyy)){
+      // reserva: coluna "Data/Adversário" combinada, formato DD/MM/AAAA - Adversário
+      const m = dataAdvStr && dataAdvStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if(m){ dd = parseInt(m[1],10); mm = parseInt(m[2],10); yyyy = parseInt(m[3],10); }
+    }
+    if(!yyyy || isNaN(yyyy)) return null;
     let hour=20, minute=0;
     const hm = horarioStr && horarioStr.match(/(\d{1,2}):(\d{2})/);
     if(hm){ hour=parseInt(hm[1],10); minute=parseInt(hm[2],10); }
