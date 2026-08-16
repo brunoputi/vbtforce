@@ -844,6 +844,15 @@ function classify(hours){
   if(hours >= 72) return 'congestionado';
   return 'muito_congestionado';
 }
+function parseDateBR(a, b, y){
+  // padrão brasileiro (dia/mês/ano) por padrão; se o segundo número só pode ser dia
+  // (>12), é porque veio em formato americano (mês/dia/ano) — inverte pra corrigir.
+  a = parseInt(a,10); b = parseInt(b,10); y = parseInt(y,10);
+  if(isNaN(a) || isNaN(b) || isNaN(y)) return null;
+  if(b > 12) return {dd:b, mm:a, yyyy:y};
+  return {dd:a, mm:b, yyyy:y};
+}
+
 function buildDatasetFromRows(rows){
   const parsed = rows.map(cols=>{
     const nome = cols[0] && cols[0].trim();
@@ -859,17 +868,18 @@ function buildDatasetFromRows(rows){
     const locRaw = cols[23] && cols[23].trim();
     const loc = (locRaw==='Fora'||locRaw==='Visitante') ? 'F' : (locRaw==='Casa' ? 'C' : '');
     if(!jogoNum) return null;
-    let mm, dd, yyyy;
+    let parsedDate = null;
     if(dataStr && dataStr !== '#VALOR!'){
       const parts = dataStr.split('/');
-      if(parts.length >= 3){ mm = parseInt(parts[0],10); dd = parseInt(parts[1],10); yyyy = parseInt(parts[2],10); }
+      if(parts.length >= 3) parsedDate = parseDateBR(parts[0], parts[1], parts[2]);
     }
-    if(!yyyy || isNaN(yyyy)){
-      // reserva: coluna "Data/Adversário" combinada, formato DD/MM/AAAA - Adversário
+    if(!parsedDate){
+      // reserva: coluna "Data/Adversário" combinada (ex: "14/01/2023 - Rio Branco PR")
       const m = dataAdvStr && dataAdvStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-      if(m){ dd = parseInt(m[1],10); mm = parseInt(m[2],10); yyyy = parseInt(m[3],10); }
+      if(m) parsedDate = parseDateBR(m[1], m[2], m[3]);
     }
-    if(!yyyy || isNaN(yyyy)) return null;
+    if(!parsedDate) return null;
+    const {dd, mm, yyyy} = parsedDate;
     let hour=20, minute=0;
     const hm = horarioStr && horarioStr.match(/(\d{1,2}):(\d{2})/);
     if(hm){ hour=parseInt(hm[1],10); minute=parseInt(hm[2],10); }
