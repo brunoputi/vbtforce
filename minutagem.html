@@ -251,6 +251,7 @@ let state = {
   grupo: 'todos', search: '', selectedAthletes: null, competicao: 'todas', sortDir: null, posicao: 'todas'
 };
 let controlsBuilt = false;
+let allAthleteNamesEverSeen = new Set();
 
 function pad2(n){ return String(n).padStart(2,'0'); }
 function rowDate(r){ const [mm,dd] = r.d.split('-').map(Number); return new Date(r.a, mm-1, dd); }
@@ -996,6 +997,7 @@ async function exportPDF(){
 async function bootstrap(){
   const sharedDataset = await fetchSharedDataset();
   if(sharedDataset) DATA = { jogadores: sharedDataset };
+  allAthleteNamesEverSeen = new Set(Object.keys(DATA.jogadores));
 
   posicoes = await fetchPosicoes();
   siglas = await fetchSiglas();
