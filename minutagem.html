@@ -43,6 +43,7 @@ select{min-width:118px;}
 #yearSelect{min-width:78px;}
 input:focus, select:focus{border-color:var(--red);}
 .file-btn, .panel-btn{background:var(--surface2); border:1px solid var(--line); border-radius:7px; padding:0 12px; height:32px; font-size:12px; font-weight:600; color:var(--gray); cursor:pointer; display:flex; align-items:center; gap:6px; white-space:nowrap;}
+.athlete-count-badge{background:var(--red); color:#fff; font-size:11px; font-weight:700; min-width:18px; height:18px; padding:0 5px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center;}
 
 #uploadToast{position:fixed; bottom:24px; right:24px; background:var(--text); color:#fff; padding:11px 18px; border-radius:9px; font-size:12.5px; font-weight:600; box-shadow:0 8px 26px rgba(0,0,0,0.28); z-index:999; opacity:0; transform:translateY(6px); transition:opacity 0.2s ease, transform 0.2s ease; pointer-events:none;}
 #uploadToast.show{opacity:1; transform:translateY(0);}
@@ -187,7 +188,7 @@ footer{margin-top:26px; color:var(--gray-dim); font-size:11px; line-height:1.6;}
       <div class="ctrl"><label>Grupo</label><select id="groupFilter"></select></div>
       <div class="ctrl">
         <label>Atletas</label>
-        <button class="panel-btn" id="athleteBtn" type="button">Selecionar (<span id="athleteCount"></span>)</button>
+        <button class="panel-btn" id="athleteBtn" type="button"><span class="athlete-count-badge" id="athleteCount"></span> Atletas</button>
         <div class="athlete-panel" id="athletePanel"></div>
       </div>
       <div class="ctrl"><label>Buscar</label><input type="text" id="searchInput" placeholder="Nome do atleta"></div>
@@ -928,7 +929,15 @@ function handleUpload(e){
       }
       DATA = newData;
       state.year = null; state.search=''; state.grupo='todos'; state.lastN=null; state.minMinutes=null;
-      state.selectedAthletes = new Set(Object.keys(DATA.jogadores));
+      const newNames = new Set(Object.keys(DATA.jogadores));
+      const prevSelected = state.selectedAthletes || new Set();
+      const preserved = new Set();
+      newNames.forEach(n => {
+        // mantém a escolha anterior pra quem já existia; quem é novo entra selecionado por padrão
+        if(prevSelected.has(n) || !allAthleteNamesEverSeen.has(n)) preserved.add(n);
+      });
+      state.selectedAthletes = preserved;
+      allAthleteNamesEverSeen = new Set([...allAthleteNamesEverSeen, ...newNames]);
       controlsBuilt = false;
       render();
       showToast('💾 Salvando pra todo mundo...');
